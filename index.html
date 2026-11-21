@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>自然选择号：太阳系防线 | NATURAL SELECTION: SOLARIS</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpolygon points='16,2 28,26 16,21 4,26' fill='%234ce8ff'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="./src/styles.css" />
+</head>
+<body>
+  <canvas id="game-canvas"></canvas>
+  <canvas id="hud-canvas"></canvas>
+  <div id="fp-transition-veil" class="fp-transition-veil"></div>
+
+  <!-- Loading Curtain -->
+  <div id="loading-overlay" class="overlay-screen">
+    <div class="loading-box">
+      <div class="tag-line">亚洲舰队 · 恒星级重巡</div>
+      <h1 class="title-main">自然选择号</h1>
+      <div class="title-sub">太阳系防线指令序列</div>
+      <div class="progress-track">
+        <div id="loading-bar" class="progress-fill"></div>
+      </div>
+      <div id="loading-text" class="loading-status">正在载入战舰总成与星域星表...</div>
+    </div>
+  </div>
+
+  <!-- Title Screen Overlay -->
+  <div id="title-overlay" class="title-overlay hidden">
+    <div class="title-top-bar">
+      <span class="badge-pill">亚洲舰队旗舰</span>
+      <span class="badge-pill amber tabular" id="title-highscore">最高纪录 00000</span>
+      <span class="badge-pill tabular" id="title-fps">-- FPS</span>
+    </div>
+
+    <div class="title-hero-panel holo-bracket">
+      <div class="tag-line">太阳系防卫战役</div>
+      <h1 class="hero-title">自然选择号：太阳系防线</h1>
+      <div class="hero-subtitle">NATURAL SELECTION · SOLARIS</div>
+      <p class="hero-desc">
+        纵贯水星至海王星防区，调度聚变武装与护航僚机编队，清剿智子中继信标并迎击强互作用力探测器「水滴」。
+      </p>
+
+      <div class="mode-group" id="mode-selector">
+        <button class="mode-btn active" data-mode="CAMPAIGN">主线战役</button>
+        <button class="mode-btn" data-mode="ENDLESS">无尽防卫</button>
+      </div>
+
+      <div class="loadout-group" id="loadout-selector">
+        <button class="loadout-btn active" data-loadout="STANDARD" title="均衡护盾与火力配置">标准型</button>
+        <button class="loadout-btn" data-loadout="PHANTOM" title="脉冲回充+20% / 闪避冷却-18% / 护盾-50">幽灵型</button>
+        <button class="loadout-btn" data-loadout="BASTION" title="护盾+140 / 武器伤害+10% / 脉冲回充-10%">堡垒型</button>
+      </div>
+
+      <div class="title-actions">
+        <button id="btn-launch" class="btn-primary">
+          <span>全舰启航</span>
+          <small>进入地球同步轨道防区</small>
+        </button>
+        <div class="quality-group" id="quality-selector">
+          <button class="q-btn" data-q="BALANCED">流畅</button>
+          <button class="q-btn active" data-q="HIGH">高画质</button>
+          <button class="q-btn" data-q="ULTRA">极致</button>
+        </div>
+        <button id="btn-title-keys" class="mini-btn big">键位设置</button>
+        <button id="btn-title-settings" class="mini-btn big">操控与体验</button>
+      </div>
+
+      <div id="title-controls-strip" class="controls-strip">
+        <div><kbd>鼠标</kbd> 航向俯仰</div>
+        <div><kbd>W A S D</kbd> 推进平移</div>
+        <div><kbd>Space / C</kbd> 升降 · <kbd>Q / E</kbd> 滚转</div>
+        <div><kbd>Shift</kbd> 脉冲加速</div>
+        <div><kbd>左键</kbd> 脉冲激光 · <kbd>右键 / R</kbd> 光矛</div>
+        <div><kbd>F</kbd> 导弹 · <kbd>X</kbd> EMP 震荡</div>
+        <div><kbd>B</kbd> 辅瞄 · <kbd>T</kbd> 按住跟瞄</div>
+        <div><kbd>G</kbd> 跃迁 · <kbd>M</kbd> 星图</div>
+        <div><kbd>V</kbd> 视角 · <kbd>U</kbd> 静音</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Active Combat HUD -->
+  <div id="hud-root" class="hud-root hidden">
+    <!-- Top-Left Overlap-Proof Stack: Mission + Active Modules + Comms -->
+    <div class="top-left-stack">
+      <div class="hud-panel mission-panel">
+        <div class="panel-header">
+          <span id="hud-stage-code" class="accent-cyan">SECTOR 01</span>
+          <span id="hud-score" class="tabular">SCORE 00000</span>
+        </div>
+        <div id="hud-stage-title" class="mission-title">地球同步防线</div>
+        <div id="hud-objective" class="mission-obj">摧毁智子中继信标 Alpha</div>
+        <div class="mission-meta">
+          <span>目标敌舰: <strong id="hud-enemies-left">0</strong><small id="hud-total-enemies" class="dim-total"></small></span>
+          <span>击毁: <strong id="hud-kills">0</strong></span>
+        </div>
+      </div>
+
+      <!-- Active Roguelite Modules & Synergies Strip -->
+      <div id="hud-modules-strip" class="modules-strip"></div>
+
+      <!-- Comms Toast Feed -->
+      <div id="comms-feed" class="comms-feed"></div>
+    </div>
+
+    <!-- Top-Center Planet Azimuth Strip & Warp Prompt -->
+    <div class="top-center-stack">
+      <div id="hud-compass" class="compass-bar"></div>
+      <div id="hud-warp-prompt" class="warp-prompt hidden"></div>
+      <div id="hud-boss-bar" class="boss-bar hidden">
+        <div class="boss-title">
+          <span>强互作用力探测器「水滴」</span>
+          <span id="hud-boss-state" class="boss-state">强互作用力场激活</span>
+        </div>
+        <div class="boss-track">
+          <div id="hud-boss-fill" class="boss-fill"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Context-Aware Tactical Hint / Perfect Dodge Banner -->
+    <div id="hud-tactical-hint" class="tactical-hint hidden"></div>
+
+    <!-- Top-Right Quick Actions & Telemetry -->
+    <div class="hud-panel sys-panel">
+      <div class="sys-row">
+        <button id="hud-cam-mode" class="mini-btn cam-pill">视角: 战术全景 [V]</button>
+        <span id="hud-fps" class="tabular">60 FPS</span>
+      </div>
+      <div class="sys-btns">
+        <button id="btn-assist" class="mini-btn active-toggle">[B] 辅瞄: 强</button>
+        <button id="btn-starmap" class="mini-btn">[M] 星图</button>
+        <button id="btn-keybinds" class="mini-btn">[K] 键位</button>
+        <button id="btn-settings" class="mini-btn">[O] 设置</button>
+        <button id="btn-help" class="mini-btn">[H] 操作</button>
+        <button id="btn-mute" class="mini-btn">[U] 音效</button>
+      </div>
+    </div>
+
+    <!-- Bottom-Left Ship Status -->
+    <div class="hud-panel status-panel">
+      <div class="stat-bar-group">
+        <div class="stat-label">
+          <span>能量护盾 SHIELD</span>
+          <span id="hud-shield-val" class="tabular">600 / 600</span>
+        </div>
+        <div class="bar-track"><div id="hud-shield-bar" class="bar-fill shield"></div></div>
+      </div>
+      <div class="stat-bar-group">
+        <div class="stat-label">
+          <span>舰体装甲 HULL</span>
+          <span id="hud-hull-val" class="tabular">1000 / 1000</span>
+        </div>
+        <div class="bar-track"><div id="hud-hull-bar" class="bar-fill hull"></div></div>
+      </div>
+      <div class="stat-bar-group">
+        <div class="stat-label">
+          <span id="lbl-boost-key">脉冲电容 BOOST [Shift]</span>
+          <span id="hud-boost-val" class="tabular">100%</span>
+        </div>
+        <div class="bar-track thin"><div id="hud-boost-bar" class="bar-fill boost"></div></div>
+      </div>
+      <div class="nav-telemetry">
+        <div>速度 <strong id="hud-speed" class="tabular">0 km/s</strong></div>
+        <div>最近天体 <strong id="hud-nearest">地球 (0.1 AU)</strong></div>
+      </div>
+    </div>
+
+    <!-- Bottom-Right Weapons & Radar -->
+    <div class="bottom-right-stack">
+      <div class="hud-panel weapons-panel">
+        <div class="wpn-row">
+          <span id="lbl-primary-key">[鼠标左键] 双联脉冲激光</span>
+          <span class="wpn-ready">ONLINE</span>
+        </div>
+        <div class="wpn-row">
+          <span id="lbl-secondary-key">[鼠标右键] 伽马粒子光矛</span>
+          <span id="hud-gamma-state" class="tabular">0%</span>
+        </div>
+        <div class="bar-track thin"><div id="hud-gamma-bar" class="bar-fill heat"></div></div>
+        <div class="wpn-row">
+          <span id="lbl-missile-key">[F] 蜂群追踪导弹</span>
+          <span id="hud-missile-val" class="tabular accent-amber">12 / 12</span>
+        </div>
+        <div class="wpn-row">
+          <span id="lbl-emp-key">[X] EMP 震荡波</span>
+          <span id="hud-emp-val" class="tabular accent-cyan">READY</span>
+        </div>
+        <div class="wpn-row">
+          <span id="lbl-overdrive-key">[Z] 恒星超载</span>
+          <span id="hud-overdrive-val" class="tabular accent-amber">35%</span>
+        </div>
+      </div>
+      <div class="radar-frame">
+        <canvas id="radar-canvas" width="164" height="164"></canvas>
+        <div class="radar-tag">TACTICAL RADAR</div>
+      </div>
+    </div>
+
+    <!-- Controls Quick Help Drawer -->
+    <div id="help-drawer" class="help-drawer hidden">
+      <div class="help-title">
+        <span>舰桥战术操纵指南</span>
+        <span class="help-badge">操作概览</span>
+      </div>
+      <div id="help-manual-grid" class="help-grid"></div>
+      <div class="help-tip">
+        <span>鼠标右键提示：</span>若长按右键触发浏览器手势，请先<strong>左键点击游戏画面</strong>激活准星锁定，或改用 <kbd>R</kbd> 键发射伽马粒子光矛（亦可在 <kbd>K</kbd> 键位设置中重绑）。
+      </div>
+    </div>
+  </div>
+
+  <!-- Interactive Solar System Star Map -->
+  <div id="starmap-overlay" class="starmap-overlay hidden">
+    <div class="starmap-container">
+      <div class="starmap-header">
+        <div>
+          <div class="tag-line">太阳系战术导航星图</div>
+          <h2>太阳系全息星图</h2>
+        </div>
+        <button id="btn-close-map" class="mini-btn">[M / ESC] 返回舰桥</button>
+      </div>
+      <div class="starmap-body">
+        <div class="starmap-canvas-wrap">
+          <canvas id="starmap-canvas"></canvas>
+          <div class="starmap-legend">
+            <span><i class="dot ship"></i> 我舰位置</span>
+            <span><i class="dot mission"></i> 当前战区</span>
+            <span><i class="dot planet"></i> 可跃迁天体（点击选中）</span>
+          </div>
+        </div>
+        <div class="starmap-sidebar">
+          <div id="planet-quick-list" class="planet-list"></div>
+          <div class="dossier-card">
+            <div class="dossier-top">
+              <div>
+                <div id="dossier-en" class="dossier-en">EARTH</div>
+                <h3 id="dossier-name">地球</h3>
+              </div>
+              <span id="dossier-au" class="badge-pill cyan tabular">1.00 AU</span>
+            </div>
+            <div id="dossier-threat" class="dossier-threat">高 · 同步轨道防线交火区</div>
+            <p id="dossier-lore" class="dossier-lore"></p>
+            <button id="btn-warp-selected" class="btn-primary full">
+              设定航向并启动曲率跃迁
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Pause / Victory / Defeat Modal -->
+  <div id="modal-overlay" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div id="modal-tag" class="tag-line">战术待命</div>
+      <h2 id="modal-title">战斗暂停</h2>
+      <p id="modal-desc"></p>
+      <div class="modal-stats" id="modal-stats"></div>
+      <div class="modal-breakdown hidden" id="modal-breakdown"></div>
+      <div class="modal-actions">
+        <button id="btn-modal-primary" class="btn-primary">继续作战</button>
+        <button id="modal-btn-settings" class="mini-btn big">操控与体验</button>
+        <button id="btn-modal-keys" class="mini-btn big">键位设置</button>
+        <button id="btn-modal-secondary" class="mini-btn big">重新开始战役</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Flight & Feel Settings Modal -->
+  <div id="settings-overlay" class="starmap-overlay hidden">
+    <div class="settings-container">
+      <div class="starmap-header">
+        <div>
+          <div class="tag-line">飞行控制 · 音频与舒适度</div>
+          <h2>操控与体验设置</h2>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <button id="btn-reset-settings" class="mini-btn">恢复默认</button>
+          <button id="btn-close-settings" class="mini-btn">[ESC] 完成并返回</button>
+        </div>
+      </div>
+      <div class="settings-body">
+        <div class="setting-row">
+          <div class="setting-info">
+            <label for="setting-volume">主音量（音效与配乐）</label>
+            <small>统一调节战斗音效、推进轰鸣与交互提示音的总体输出响度</small>
+          </div>
+          <div class="setting-ctrl">
+            <input id="setting-volume" class="setting-range" type="range" min="0" max="1.5" step="0.05" value="0.85" />
+            <span id="setting-volume-val" class="tabular setting-val">85%</span>
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <label for="setting-reduce-motion">舒适防晕模式（推荐开启）</label>
+            <small>默认抑制第一人称桶滚/反向头晃、剧烈 FOV 缩放与高频色散；关闭可开启高动感镜头</small>
+          </div>
+          <div class="setting-ctrl">
+            <input id="setting-reduce-motion" class="setting-check" type="checkbox" checked />
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <label for="setting-sens">鼠标航向灵敏度</label>
+            <small>调节准星与飞船转向响应速度（同步适配锁定与非锁定模式）</small>
+          </div>
+          <div class="setting-ctrl">
+            <input id="setting-sens" class="setting-range" type="range" min="0.4" max="2.2" step="0.1" value="1.0" />
+            <span id="setting-sens-val" class="tabular setting-val">1.0x</span>
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <label for="setting-invert-y">反转俯仰轴（Y 轴）</label>
+            <small>开启后鼠标上推俯冲、下拉爬升（传统飞行摇杆习惯）</small>
+          </div>
+          <div class="setting-ctrl">
+            <input id="setting-invert-y" class="setting-check" type="checkbox" />
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <label for="setting-autolevel">黄道面自动水平回正</label>
+            <small>松开滚转键后自动将战舰缓和归平至太阳系黄道水平面</small>
+          </div>
+          <div class="setting-ctrl">
+            <input id="setting-autolevel" class="setting-check" type="checkbox" checked />
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <label for="setting-shake">镜头震屏与冲击强度</label>
+            <small>调节受击、击杀、跃迁脱离与爆破时的镜头反馈幅度</small>
+          </div>
+          <div class="setting-ctrl">
+            <input id="setting-shake" class="setting-range" type="range" min="0" max="1.5" step="0.1" value="0.75" />
+            <span id="setting-shake-val" class="tabular setting-val">75%</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tactical Roguelite Module Draft Overlay -->
+  <div id="upgrade-overlay" class="starmap-overlay hidden">
+    <div class="upgrade-container">
+      <div class="tag-line">战术系统升级</div>
+      <h2 class="upgrade-title">自然选择号 · 模块部署</h2>
+      <p id="upgrade-subtitle" class="upgrade-subtitle">请选择一项强化模块（按 [1] [2] [3] 或点击部署）</p>
+      <div id="upgrade-cards" class="upgrade-cards"></div>
+    </div>
+  </div>
+
+  <!-- Custom Keybindings Modal -->
+  <div id="keybinds-overlay" class="starmap-overlay hidden">
+    <div class="keybinds-container">
+      <div class="starmap-header">
+        <div>
+          <div class="tag-line">飞控与火控键位</div>
+          <h2>自定义键位设置</h2>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <button id="btn-reset-keys" class="mini-btn">恢复默认</button>
+          <button id="btn-close-keys" class="mini-btn">[ESC] 完成并返回</button>
+        </div>
+      </div>
+      <div class="keybinds-hint">点击任意按键按钮后，按下键盘按键、鼠标中键 / 侧键 / 左右键或滚轮即可绑定（按 ESC 取消；重复按键自动互换）。设置自动保存。</div>
+      <div id="keybinds-list" class="keybinds-list"></div>
+    </div>
+  </div>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
