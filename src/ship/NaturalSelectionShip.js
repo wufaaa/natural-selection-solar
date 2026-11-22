@@ -262,6 +262,7 @@ export class NaturalSelectionShip {
     this._shieldWasDepleted = false;
 
     this.isBoosting = false;
+    this.gestureBoostExhausted = false;
     this.throttle = 0.25;
     this.bankAngle = 0;
     this.pitchOffset = 0;
@@ -415,6 +416,7 @@ export class NaturalSelectionShip {
   }
 
   resetAt(position, lookTarget) {
+    this.gestureBoostExhausted = false;
     this.root.position.copy(position);
     this.prevPosition.copy(position);
     this.velocity.set(0, 0, 0);
@@ -555,6 +557,17 @@ export class NaturalSelectionShip {
     return this.visualGroup.localToWorld(out);
   }
 
+  triggerDodge(direction) {
+    if ((direction !== 'LEFT' && direction !== 'RIGHT') || this.hull <= 0
+      || this.warpState !== 'IDLE' || this.dodgeCooldown > 0) return false;
+    this.dodgeTimer = 0.46;
+    this.dodgeDir = direction === 'LEFT' ? 1 : -1;
+    this.dodgeCooldown = 1.4 * (this.loadout?.dodgeCdMult || 1.0);
+    this.dodgePerfectTriggered = false;
+    this.onDodge?.();
+    return true;
+  }
+
   update(dt, time, input, playMode, onWarpComplete, assistOptions = null, isWarpSegmentClear = null) {
     this.prevPosition.copy(this.root.position);
     this.timeSinceDamage += dt;
@@ -674,6 +687,8 @@ export class NaturalSelectionShip {
 
     const sensMult = this.settings?.mouseSensitivity ?? 1.0;
     const pitchSign = this.settings?.invertPitch ? -1 : 1;
+    const gestureFlight = input.controlMode === 'GESTURE';
+    const reduceMotion = this.settings?.reduceMotion;
 
     let stepYaw = 0;
     let stepPitch = 0;
@@ -681,7 +696,19 @@ export class NaturalSelectionShip {
     let rawY = 0;
 
     if (!input.orbitLookActive) {
-      if (input.pointerLocked) {
+      if (gestureFlight) {
+        const sensitivity = this.settings?.gestureSensitivity;
+        const gain = Number.isFinite(sensitivity) ? THREE.MathUtils.clamp(sensitivity, 0.6, 1.6) : 1;
+        const yaw = THREE.MathUtils.clamp(input.gestureAimX * gain, -1, 1);
+        const pitch = THREE.MathUtils.clamp(input.gestureAimY * gain, -1, 1);
+        const yawMax = SHIP_CONFIG.yawRate * (reduceMotion ? 0.96 : 1.18);
+        const pitchMax = SHIP_CONFIG.pitchRate * (reduceMotion ? 0.90 : 1.10);
+        const turnAlpha = 1 - Math.exp(-(reduceMotion ? 26 : 32) * dt);
+        this.yawVel = THREE.MathUtils.lerp(THREE.MathUtils.clamp(this.yawVel, -yawMax, yawMax), -yaw * yawMax, turnAlpha);
+        this.pitchVel = THREE.MathUtils.lerp(THREE.MathUtils.clamp(this.pitchVel, -pitchMax, pitchMax), -pitch * pitchSign * pitchMax, turnAlpha);
+        stepYaw = this.yawVel * dt;
+        stepPitch = this.pitchVel * dt;
+      } else if (input.pointerLocked) {
         const sens = 0.0024 * sensMult;
         stepYaw = THREE.MathUtils.clamp(-input.deltaX * sens, -0.28, 0.28);
         stepPitch = THREE.MathUtils.clamp(-input.deltaY * sens * pitchSign, -0.28, 0.28);
@@ -758,41 +785,36 @@ export class NaturalSelectionShip {
     this._right.set(1, 0, 0).applyQuaternion(this.root.quaternion);
     this._up.set(0, 1, 0).applyQuaternion(this.root.quaternion);
 
-    const thrustFwd = (input.isActionDown('thrustFwd') ? 1 : 0) - (input.isActionDown('thrustBack') ? 1 : 0);
+    const thrustFwd = input.getThrottleAxis?.()
+      ?? (Number(input.isActionDown('thrustFwd')) - Number(input.isActionDown('thrustBack')));
     const leftDown = input.isActionDown('strafeLeft');
     const rightDown = input.isActionDown('strafeRight');
     const thrustStrafe = (rightDown ? 1 : 0) - (leftDown ? 1 : 0);
     const thrustVert = (input.isActionDown('thrustUp') ? 1 : 0) - (input.isActionDown('thrustDown') ? 1 : 0);
 
     // Double-tap A / D Phase Barrel-Roll Dodge (0.46s evasion window)
-    const dodgeCdBase = 1.4 * (this.loadout?.dodgeCdMult || 1.0);
     this.dodgeCooldown = Math.max(0, this.dodgeCooldown - dt);
     this.dodgeTimer = Math.max(0, this.dodgeTimer - dt);
     if (leftDown && !this._wasLeftDown) {
-      if (time - this._tapLeftTime < 0.28 && this.dodgeCooldown <= 0) {
-        this.dodgeTimer = 0.46;
-        this.dodgeDir = 1;
-        this.dodgeCooldown = dodgeCdBase;
-        this.dodgePerfectTriggered = false;
-        this.onDodge?.();
-      }
+      if (time - this._tapLeftTime < 0.28) this.triggerDodge('LEFT');
       this._tapLeftTime = time;
     }
     if (rightDown && !this._wasRightDown) {
-      if (time - this._tapRightTime < 0.28 && this.dodgeCooldown <= 0) {
-        this.dodgeTimer = 0.46;
-        this.dodgeDir = -1;
-        this.dodgeCooldown = dodgeCdBase;
-        this.dodgePerfectTriggered = false;
-        this.onDodge?.();
-      }
+      if (time - this._tapRightTime < 0.28) this.triggerDodge('RIGHT');
       this._tapRightTime = time;
     }
     this._wasLeftDown = leftDown;
     this._wasRightDown = rightDown;
+    if (gestureFlight) {
+      const dodgeLeft = input.consumeAction('dodgeLeft');
+      const dodgeRight = input.consumeAction('dodgeRight');
+      if (dodgeLeft || dodgeRight) this.triggerDodge(dodgeLeft ? 'LEFT' : 'RIGHT');
+    }
 
-    const wantBoost = input.isActionDown('boost') && this.boost > 4;
-    this.isBoosting = wantBoost && (thrustFwd >= 0);
+    const boostHeld = input.isActionDown('boost');
+    if (!gestureFlight || !boostHeld || this.boost >= 16) this.gestureBoostExhausted = false;
+    else if (this.boost <= 4) this.gestureBoostExhausted = true;
+    this.isBoosting = boostHeld && this.boost > 4 && thrustFwd >= 0 && !this.gestureBoostExhausted;
 
     if (this.isBoosting) {
       this.boost = Math.max(0, this.boost - SHIP_CONFIG.boostDrainRate * (this.boostDrainMult || 1.0) * dt);
@@ -802,13 +824,10 @@ export class NaturalSelectionShip {
     }
 
     // True tactical hover when W/S released (0 forward drift) + Phase Barrel-Roll lateral impulse
+    const cruiseCap = gestureFlight ? 255 : SHIP_CONFIG.cruiseSpeed;
     const fwdSpeed = this.isBoosting
       ? SHIP_CONFIG.boostSpeed
-      : thrustFwd > 0
-      ? SHIP_CONFIG.cruiseSpeed
-      : thrustFwd < 0
-      ? -SHIP_CONFIG.reverseSpeed
-      : 0;
+      : thrustFwd * (thrustFwd >= 0 ? cruiseCap : SHIP_CONFIG.reverseSpeed);
 
     const dodgeImpulse = this.dodgeTimer > 0 ? -this.dodgeDir * 245 : 0;
 
@@ -822,8 +841,8 @@ export class NaturalSelectionShip {
     this.root.position.addScaledVector(this.velocity, dt);
 
     // Responsive banking & pitch attitude driven by angular velocity + lateral strafe + 360 barrel roll
-    const maxBank = this.settings?.reduceMotion ? 0.16 : 0.28;
-    const bankGainYaw = this.settings?.reduceMotion ? 0.12 : 0.19;
+    const maxBank = reduceMotion ? (gestureFlight ? 0.10 : 0.16) : 0.28;
+    const bankGainYaw = reduceMotion ? (gestureFlight ? 0.08 : 0.12) : 0.19;
     const targetBank = THREE.MathUtils.clamp(this.yawVel * bankGainYaw - thrustStrafe * (this.settings?.reduceMotion ? 0.09 : 0.14), -maxBank, maxBank);
     const targetPitchOff = THREE.MathUtils.clamp(this.pitchVel * 0.05, -0.10, 0.10);
     this.bankAngle = THREE.MathUtils.lerp(this.bankAngle, targetBank, 1 - Math.exp(-9.0 * dt));
@@ -831,7 +850,7 @@ export class NaturalSelectionShip {
     const dodgeRoll = this.dodgeTimer > 0 ? this.dodgeDir * (1 - this.dodgeTimer / 0.46) * Math.PI * 2 : 0;
     this.visualGroup.rotation.set(this.pitchOffset, 0, this.bankAngle + dodgeRoll);
 
-    const powerTarget = this.isBoosting ? 1.2 : thrustFwd > 0 ? 0.85 : thrustFwd < 0 ? 0.18 : 0.35;
+    const powerTarget = this.isBoosting ? 1.2 : 0.35 + thrustFwd * (thrustFwd >= 0 ? 0.50 : 0.17);
     this.throttle = THREE.MathUtils.lerp(this.throttle, powerTarget, 1 - Math.exp(-8 * dt));
     this._updateThrusters(dt, time, this.throttle, false);
   }

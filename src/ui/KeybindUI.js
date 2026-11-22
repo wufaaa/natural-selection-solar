@@ -122,11 +122,24 @@ export class KeybindUI {
         : `[${kb.getLabel('mute')}] 音效`;
     }
 
-    set('lbl-boost-key', `脉冲电容 BOOST [${kb.getLabel('boost')}]`);
-    set('lbl-primary-key', `[${kb.getLabel('firePrimary')}] 双联脉冲激光`);
-    set('lbl-secondary-key', `[${kb.getLabel('fireSecondary')} / R] 伽马粒子光矛`);
-    set('lbl-missile-key', `[${kb.getLabel('missiles')}] 蜂群追踪导弹`);
-    set('lbl-emp-key', `[${kb.getLabel('emp')}] EMP 震荡波`);
+    const gestureBtn = document.getElementById('btn-gesture-mode');
+    if (gestureBtn) {
+      const active = gestureBtn.classList.contains('active-toggle');
+      gestureBtn.textContent = active
+        ? `[${kb.getLabel('gestureToggle')}] 手势: 开`
+        : `[${kb.getLabel('gestureToggle')}] 手势飞控`;
+    }
+    set('btn-gesture-cal', `[${kb.getLabel('gestureCalibrate')}] 校准`);
+    set('btn-gesture-exit', `[${kb.getLabel('gestureToggle')}] 退出`);
+
+    const isGestureActive = Boolean(document.getElementById('hud-root')?.classList.contains('gesture-active'));
+    if (!isGestureActive) {
+      set('lbl-boost-key', `脉冲电容 BOOST [${kb.getLabel('boost')}]`);
+      set('lbl-primary-key', `[${kb.getLabel('firePrimary')}] 双联脉冲激光`);
+      set('lbl-secondary-key', `[${kb.getLabel('fireSecondary')} / R] 伽马粒子光矛`);
+      set('lbl-missile-key', `[${kb.getLabel('missiles')}] 蜂群追踪导弹`);
+      set('lbl-emp-key', `[${kb.getLabel('emp')}] EMP 震荡波`);
+    }
     set('lbl-overdrive-key', `[${kb.getLabel('overdrive')}] 恒星超载`);
 
     const strip = document.getElementById('title-controls-strip');
@@ -140,7 +153,7 @@ export class KeybindUI {
         <div><kbd>${kb.getLabel('missiles')}</kbd> 蜂群导弹 · <kbd>${kb.getLabel('emp')}</kbd> EMP 震荡</div>
         <div><kbd>${kb.getLabel('aimAssist')}</kbd> 辅助瞄准 · <kbd>${kb.getLabel('autoTrack')}</kbd> 按住跟瞄</div>
         <div><kbd>${kb.getLabel('warp')}</kbd> 曲率跃迁 · <kbd>${kb.getLabel('starmap')}</kbd> 太阳系星图</div>
-        <div><kbd>${kb.getLabel('camera')}</kbd> 切换视角(含第一人称) · <kbd>${kb.getLabel('keybinds')}</kbd> 改键</div>
+        <div><kbd>${kb.getLabel('camera')}</kbd> 切换视角 · <kbd>${kb.getLabel('gestureToggle')}</kbd> 手势飞控</div>
       `;
     }
 
@@ -162,7 +175,14 @@ export class KeybindUI {
         <div class="help-section-tag">导航与视界切换</div>
         <div class="help-kv"><kbd>${kb.getLabel('starmap')}</kbd> · <kbd>${kb.getLabel('warp')}</kbd><span>全息星图 · 启动曲率跃迁</span></div>
         <div class="help-kv"><kbd>${kb.getLabel('camera')}</kbd> · <kbd>${kb.getLabel('keybinds')}</kbd> · <kbd>${kb.getLabel('mute')}</kbd><span>切换视角 · 改键 · 静音</span></div>
+        <div class="help-kv"><kbd>${kb.getLabel('gestureToggle')}</kbd> · <kbd>${kb.getLabel('gestureCalibrate')}</kbd><span>切换双手手势飞控 · 重校飞控手中立位</span></div>
         <div class="help-kv"><kbd>Alt+鼠标</kbd> / <kbd>滚轮</kbd><span>环绕观舰（松开回位）· 视距</span></div>
+
+        <div class="help-section-tag">双手摄像头手势飞控（默认左手方向控，右手火控）</div>
+        <div class="help-kv"><kbd>飞控手（默认左手）</kbd><span>张掌朝镜头停止 · 半握巡航(2000~3000速) · 越握越快 · 五指/拳头摆动控制方向 · 仅伸1指原地精瞄</span></div>
+        <div class="help-kv"><kbd>全拳冲刺与翻滚</kbd><span>左手握紧全拳直接触发冲刺 · 伸拇指向左右转触发桶滚闪避（均与右手武器并行）</span></div>
+        <div class="help-kv"><kbd>操作手（默认右手）</kbd><span>右手独立开火：握拳普攻 · 1指光矛 · 2指导弹 · 3指EMP</span></div>
+        <div class="help-kv"><kbd>跃迁与升级选卡</kbd><span>右手拇指+食指捏住 0.45s 向锁定行星跃迁 · 升级三选一张掌解锁后 1/2/3 指部署（[O] 可切左右手）</span></div>
       `;
     }
   }

@@ -1,6 +1,6 @@
 {
   "name": "natural-selection-solar",
-  "version": "4.2.0",
+  "version": "4.4.1",
   "private": true,
   "type": "module",
   "main": "electron/main.cjs",
@@ -47,10 +47,16 @@
         "dmg",
         "zip"
       ],
-      "identity": null
+      "identity": null,
+      "extendInfo": {
+        "NSCameraUsageDescription": "自然选择号需要访问摄像头用于本地双手手势飞控（视频仅在本地实时处理，不上传或录制）。"
+      },
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
     }
   },
   "dependencies": {
+    "@mediapipe/tasks-vision": "1.2.3",
     "three": "^0.174.0"
   },
   "devDependencies": {

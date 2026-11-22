@@ -24,6 +24,8 @@ export const DEFAULT_KEYBINDS = {
   mute: 'KeyU',
   keybinds: 'KeyK',
   settings: 'KeyO',
+  gestureToggle: 'KeyN',
+  gestureCalibrate: 'KeyJ',
 };
 
 export const KEYBIND_META = [
@@ -52,6 +54,8 @@ export const KEYBIND_META = [
   { group: '导航与系统', action: 'mute', label: '音效静音切换' },
   { group: '导航与系统', action: 'keybinds', label: '键位设置面板' },
   { group: '导航与系统', action: 'settings', label: '操控设置面板' },
+  { group: '导航与系统', action: 'gestureToggle', label: '切换双手手势飞控' },
+  { group: '导航与系统', action: 'gestureCalibrate', label: '手势中立位重新校准' },
 ];
 
 export function formatKeyCode(code) {
@@ -92,9 +96,10 @@ export function formatKeyCode(code) {
   return map[code] || code;
 }
 
-const MENU_SAFE_ONLY_ACTIONS = new Set(['settings', 'keybinds', 'starmap']);
+const MENU_SAFE_ONLY_ACTIONS = new Set(['settings', 'keybinds', 'starmap', 'gestureToggle', 'gestureCalibrate']);
 const RESERVED_CODES = new Set(['Escape', 'Tab']);
-const MIGRATION_FALLBACK_KEYS = ['KeyO', 'F2', 'Backquote', 'BracketRight', 'Semicolon', 'Comma', 'Period', 'KeyJ', 'KeyN', 'KeyP', 'KeyY'];
+const MIGRATION_FALLBACK_KEYS = ['KeyO', 'F2', 'F3', 'F4', 'Backquote', 'BracketLeft', 'BracketRight', 'Semicolon', 'Comma', 'Period', 'Slash', 'KeyJ', 'KeyN', 'KeyL', 'KeyP', 'KeyY'];
+const NEWLY_ADDED_ACTIONS = ['settings', 'gestureToggle', 'gestureCalibrate'];
 
 export class KeybindManager {
   constructor() {
@@ -120,10 +125,11 @@ export class KeybindManager {
       const parsed = JSON.parse(raw);
       let migrated = false;
 
-      // Legacy actions get precedence before newly introduced actions (such as settings)
+      // Legacy actions get precedence before newly introduced actions (such as settings / gesture controls)
+      const newSet = new Set(NEWLY_ADDED_ACTIONS);
       const orderedActions = [
-        ...Object.keys(DEFAULT_KEYBINDS).filter((k) => k !== 'settings'),
-        ...(Object.hasOwn(DEFAULT_KEYBINDS, 'settings') ? ['settings'] : []),
+        ...Object.keys(DEFAULT_KEYBINDS).filter((k) => !newSet.has(k)),
+        ...NEWLY_ADDED_ACTIONS.filter((k) => Object.hasOwn(DEFAULT_KEYBINDS, k)),
       ];
       const usedCodes = new Set();
       const pendingMigration = [];

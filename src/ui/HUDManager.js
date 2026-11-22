@@ -57,6 +57,37 @@ export class HUDManager {
     this._hintTimer = 0;
     this._hintDuration = 3.6;
 
+    // Dual-hand webcam gesture flight PiP refs (null-guarded)
+    this.elGesturePip = document.getElementById('gesture-pip');
+    this.elGestureVideo = document.getElementById('gesture-video');
+    this.gestureOverlayCanvas = document.getElementById('gesture-overlay-canvas');
+    this.gestureOverlayCtx = this.gestureOverlayCanvas?.getContext?.('2d') || null;
+    this.elGestureDot = document.getElementById('gesture-status-dot');
+    this.elGestureStatusText = document.getElementById('gesture-status-text');
+    this.elBtnGestureFlightHand = document.getElementById('btn-gesture-flight-hand');
+    this.elGestureCalTrack = document.getElementById('gesture-cal-track');
+    this.elGestureCalFill = document.getElementById('gesture-cal-fill');
+    this.elGestureTelemetry = document.getElementById('gesture-pip-telemetry');
+    this.elBtnGestureMode = document.getElementById('btn-gesture-mode');
+    this.elGestureActionGuide = document.getElementById('gesture-action-guide');
+    this.elGagFlightRole = document.getElementById('gag-flight-role');
+    this.elGagOpsRole = document.getElementById('gag-ops-role');
+    this._gagChips = new Map();
+    if (this.elGestureActionGuide) {
+      for (const chip of this.elGestureActionGuide.querySelectorAll('.gag-chip[data-chip]')) {
+        this._gagChips.set(chip.dataset.chip, chip);
+      }
+    }
+    this.elLblBoostKey = document.getElementById('lbl-boost-key');
+    this.elLblPrimaryKey = document.getElementById('lbl-primary-key');
+    this.elLblSecondaryKey = document.getElementById('lbl-secondary-key');
+    this.elLblMissileKey = document.getElementById('lbl-missile-key');
+    this.elLblEmpKey = document.getElementById('lbl-emp-key');
+    this._gestureLogicalW = 214;
+    this._gestureLogicalH = 136;
+    this._lastGestureDrawSig = '';
+    this._wasGestureHud = false;
+
     this.hitmarkerTimer = 0;
     this.hitmarkerKind = 'hit';
     this.damageDirAngle = 0;
@@ -65,6 +96,11 @@ export class HUDManager {
     this.streakBanner = null; // { text, color, age, life }
 
     this.aimedWarpBodyId = null;
+    this.explicitAimedWarpBodyId = null;
+    this.explicitMissionWarpBodyId = null;
+    this._stickyWarpBodyId = null;
+    this._stickyWarpHoldUntilMs = 0;
+    this._lastFlightHand = 'LEFT';
     this.fpsSmooth = 60;
     this._compassBuilt = false;
     this._compassEls = new Map();
@@ -107,6 +143,38 @@ export class HUDManager {
     if (this.radarCanvas) {
       this._sizeRadarCanvas(dpr);
     }
+    if (this.gestureOverlayCanvas && this.gestureOverlayCtx) {
+      this._sizeGestureOverlayCanvas(dpr);
+    }
+  }
+
+  _sizeGestureOverlayCanvas(dpr) {
+    const canvas = this.gestureOverlayCanvas;
+    if (!canvas || !this.gestureOverlayCtx) return;
+    const lw = Math.max(1, Math.round(canvas.clientWidth || this._gestureLogicalW || 214));
+    const lh = Math.max(1, Math.round(canvas.clientHeight || this._gestureLogicalH || 136));
+    const bw = Math.max(1, Math.round(lw * dpr));
+    const bh = Math.max(1, Math.round(lh * dpr));
+    if (canvas.width !== bw || canvas.height !== bh) {
+      canvas.width = bw;
+      canvas.height = bh;
+      this._lastGestureDrawSig = '';
+    }
+    this.gestureOverlayCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this._gestureLogicalW = lw;
+    this._gestureLogicalH = lh;
+  }
+
+  getGestureVideoElement() {
+    return this.elGestureVideo || null;
+  }
+
+  setGestureButtonState(active, keybinds = null) {
+    if (!this.elBtnGestureMode) return;
+    const keyLabel = keybinds ? keybinds.getLabel('gestureToggle') : 'N';
+    const label = active ? `[${keyLabel}] 手势: 开` : `[${keyLabel}] 手势飞控`;
+    this._setText(this.elBtnGestureMode, label);
+    this.elBtnGestureMode.classList.toggle('active-toggle', Boolean(active));
   }
 
   /**
@@ -204,22 +272,36 @@ export class HUDManager {
     // Force the radar to repaint immediately on the first frame after a reset.
     this._drawRadarPending = true;
     this.aimedWarpBodyId = null;
+    this.explicitAimedWarpBodyId = null;
+    this.explicitMissionWarpBodyId = null;
+    this._stickyWarpBodyId = null;
+    this._stickyWarpHoldUntilMs = 0;
+    this._lastFlightHand = 'LEFT';
+    this.updateGesturePiP(null, 'KBM', null);
+    this.setGestureButtonState(false, null);
   }
 
-  setMode(mode) {
+  setMode(mode, { keepGesturePip = false } = {}) {
     if (mode === 'TITLE') {
       this.titleOverlay.classList.remove('hidden');
+      this.hudRoot.classList.remove('hud-upgrade-pip-only');
       this.hudRoot.classList.add('hidden');
       this.hudCanvas.classList.add('hidden');
     } else if (mode === 'PLAYING') {
       this.titleOverlay.classList.add('hidden');
-      this.hudRoot.classList.remove('hidden');
+      this.hudRoot.classList.remove('hud-upgrade-pip-only', 'hidden');
       this.hudCanvas.classList.remove('hidden');
       // Wipe the last frame so resuming from pause can never flash a stale reticle
       // or the previous engagement's target boxes for one frame.
       this.ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+    } else if (mode === 'UPGRADE' && keepGesturePip) {
+      this.titleOverlay.classList.add('hidden');
+      this.hudRoot.classList.remove('hidden');
+      this.hudRoot.classList.add('hud-upgrade-pip-only');
+      this.hudCanvas.classList.add('hidden');
     } else {
       this.titleOverlay.classList.add('hidden');
+      this.hudRoot.classList.remove('hud-upgrade-pip-only');
       this.hudRoot.classList.add('hidden');
       this.hudCanvas.classList.add('hidden');
     }
@@ -379,7 +461,7 @@ export class HUDManager {
     }, 6800);
   }
 
-  update(dt, { ship, camera, cameraRig, input, keybinds, solarSystem, enemyManager, weaponSystem, missionManager, upgradeSystem, playMode, elapsed = null, rawFps = null }) {
+  update(dt, { ship, camera, cameraRig, input, keybinds, solarSystem, enemyManager, weaponSystem, missionManager, upgradeSystem, playMode, elapsed = null, rawFps = null, starMapLockedTargetId = null, gestureFlightHand = 'LEFT' }) {
     // Prefer a caller-supplied real frame rate: main.js clamps dt to 0.05, which would otherwise
     // floor the displayed value at 20 FPS and hide genuine low-framerate conditions.
     const instantFps = Number.isFinite(rawFps) && rawFps > 0 ? rawFps : dt > 0.0001 ? 1 / dt : 0;
@@ -389,6 +471,12 @@ export class HUDManager {
     const fpsStr = `${Math.round(this.fpsSmooth)} FPS`;
     this._setText(this.elTitleFps, fpsStr);
     this._setText(this.elFps, fpsStr);
+
+    if (playMode === 'UPGRADE' && input?.controlMode === 'GESTURE') {
+      this.setGestureButtonState(true, keybinds);
+      this.updateGesturePiP(input.gestureSnapshot || null, 'GESTURE', keybinds, { flightHand: gestureFlightHand });
+      return;
+    }
 
     if (playMode !== 'PLAYING') return;
 
@@ -498,6 +586,11 @@ export class HUDManager {
       this.elBtnAssist.classList.toggle('active-toggle', weaponSystem.aimAssistMode !== 'OFF');
     }
 
+    if (input?.controlMode) {
+      this.setGestureButtonState(input.controlMode === 'GESTURE', keybinds);
+      this.updateGesturePiP(input.gestureSnapshot || null, input.controlMode, keybinds, { flightHand: gestureFlightHand });
+    }
+
     // Weapon telemetry
     const maxAmmo = WEAPON_CONFIG.missileMaxAmmo + (weaponSystem.bonusMissileMax || 0);
     this._setText(
@@ -565,7 +658,7 @@ export class HUDManager {
     }
 
     this._updateCompass(ship, solarSystem);
-    this._drawCanvasHUD(ship, camera, cameraRig, input, keybinds, solarSystem, enemyManager, weaponSystem, missionManager, upgradeSystem, elapsed);
+    this._drawCanvasHUD(ship, camera, cameraRig, input, keybinds, solarSystem, enemyManager, weaponSystem, missionManager, upgradeSystem, elapsed, starMapLockedTargetId);
 
     // Radar is a decorative sweep: ~25 Hz reads identically and costs far less than per-frame.
     this._radarAcc += dt;
@@ -753,7 +846,7 @@ export class HUDManager {
     ctx.restore();
   }
 
-  _drawCanvasHUD(ship, camera, cameraRig, input, keybinds, solarSystem, enemyManager, weaponSystem, missionManager, upgradeSystem = null, elapsed = null) {
+  _drawCanvasHUD(ship, camera, cameraRig, input, keybinds, solarSystem, enemyManager, weaponSystem, missionManager, upgradeSystem = null, elapsed = null, starMapLockedTargetId = null) {
     const ctx = this.ctx;
     const w = window.innerWidth;
     const h = window.innerHeight;
@@ -1052,12 +1145,18 @@ export class HUDManager {
       ctx.textAlign = 'left';
     }
 
-    // 2. Planet Warp Waypoint Beacons
+    // 2. Planet Warp Waypoint Beacons (~22 deg acquire cone, ~28 deg sticky + pinch-charge hysteresis)
     const shipPos = ship.root.position;
     const fwd = ship.getForward();
     const proj = new THREE.Vector3();
+    const isGesture = input?.controlMode === 'GESTURE';
+    const gSnap = input?.gestureSnapshot || null;
+    const warpCharge = isGesture ? Math.max(0, Math.min(1, Number(gSnap?.warpChargeProgress) || 0)) : 0;
+    const nowWarpMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
     let bestAimedBody = null;
-    let bestAimDot = 0.965; // ~15 deg forward cone
+    let bestAimDot = 0.927; // ~22 deg forward cone
+    let stickyCandidate = null;
+    let stickyDot = -1;
 
     const missionSectorId = missionManager.activeTargetSectorId;
 
@@ -1072,6 +1171,10 @@ export class HUDManager {
       if (dot > bestAimDot) {
         bestAimDot = dot;
         bestAimedBody = rec.def;
+      }
+      if (rec.def.id === this._stickyWarpBodyId) {
+        stickyCandidate = rec.def;
+        stickyDot = dot;
       }
 
       proj.copy(wp).project(camera);
@@ -1097,28 +1200,96 @@ export class HUDManager {
       }
     }
 
+    if (stickyCandidate && (stickyDot > 0.883 || (warpCharge > 0 && nowWarpMs <= this._stickyWarpHoldUntilMs))) {
+      if (!bestAimedBody || warpCharge > 0) {
+        bestAimedBody = stickyCandidate;
+      }
+    }
+    if (bestAimedBody) {
+      this._stickyWarpBodyId = bestAimedBody.id;
+      this._stickyWarpHoldUntilMs = nowWarpMs + 900;
+    } else if (warpCharge === 0 || nowWarpMs > this._stickyWarpHoldUntilMs || !stickyCandidate) {
+      this._stickyWarpBodyId = null;
+      this._stickyWarpHoldUntilMs = 0;
+    }
+
+    this.explicitAimedWarpBodyId = bestAimedBody ? bestAimedBody.id : null;
     this.aimedWarpBodyId = bestAimedBody ? bestAimedBody.id : missionSectorId;
+
+    const mDef = missionSectorId ? SOLAR_BODIES.find((b) => b.id === missionSectorId) || null : null;
+    const mPos = mDef ? solarSystem.getBodyWorldPosition(missionSectorId) : null;
+    const missionAway = Boolean(
+      mDef
+      && mPos
+      && mPos.distanceTo(shipPos) >= mDef.radius * 3.5 + 240
+      && !enemyManager.enemies.some((e) => e.sectorId === missionSectorId && e.mesh.position.distanceTo(shipPos) < 1200)
+    );
+    this.explicitMissionWarpBodyId = missionAway ? missionSectorId : null;
+
+    let starMapLockedDef = null;
+    if (starMapLockedTargetId) {
+      const candidate = SOLAR_BODIES.find((b) => b.id === starMapLockedTargetId) || null;
+      const wp = candidate ? solarSystem.getBodyWorldPosition(starMapLockedTargetId) : null;
+      if (candidate && wp && wp.distanceTo(shipPos) >= candidate.radius * 3.5 + 240) {
+        starMapLockedDef = candidate;
+      }
+    }
+
     const warpKey = keybinds ? keybinds.getLabel('warp') : 'G';
     const mapKey = keybinds ? keybinds.getLabel('starmap') : 'M';
     const backKey = keybinds ? keybinds.getLabel('thrustBack') : 'S';
+    const oHand = (gSnap?.flightHand || this._lastFlightHand || 'LEFT') === 'LEFT' ? '右手' : '左手';
+    const activeWarpDef = ship.warpTargetId ? SOLAR_BODIES.find((b) => b.id === ship.warpTargetId) : null;
+    const activeWarpName = activeWarpDef?.name || '';
+    const promptChargePct = Math.round(warpCharge * 100);
+    const setIdleWarpPrompt = (idleText, targetName) => {
+      this.warpPrompt.classList.remove('hidden');
+      this.warpPrompt.classList.toggle('is-pinching', warpCharge > 0);
+      this.warpPrompt.style.setProperty('--warp-charge', `${promptChargePct}%`);
+      this.warpPrompt.textContent = warpCharge > 0
+        ? `捏住「${targetName}」曲率充能 ${promptChargePct}%（稳住即跃迁，松手取消）`
+        : idleText;
+    };
+    const clearWarpChargeUi = () => {
+      this.warpPrompt.classList.remove('is-pinching');
+      this.warpPrompt.style.setProperty('--warp-charge', '0%');
+    };
+
     if (ship.warpState === 'CHARGING') {
+      clearWarpChargeUi();
       this.warpPrompt.classList.remove('hidden');
-      this.warpPrompt.textContent = '曲率引擎充能中 — 正在校准航向...';
+      this.warpPrompt.textContent = activeWarpName
+        ? `曲率引擎充能中 · 目标「${activeWarpName}」...`
+        : '曲率引擎充能中 — 正在校准航向...';
     } else if (ship.warpState === 'WARPING') {
+      clearWarpChargeUi();
       this.warpPrompt.classList.remove('hidden');
-      this.warpPrompt.textContent = `曲率超巡航中 [按 ${warpKey} 或 ${backKey} 随时脱离]`;
+      this.warpPrompt.textContent = activeWarpName
+        ? `曲率超巡航 · 前往「${activeWarpName}」[按 ${warpKey} 或 ${backKey} 脱离]`
+        : `曲率超巡航中 [按 ${warpKey} 或 ${backKey} 随时脱离]`;
     } else if (bestAimedBody) {
-      this.warpPrompt.classList.remove('hidden');
-      this.warpPrompt.textContent = `已锁定「${bestAimedBody.name}」— 按 [${warpKey}] 启动曲率跃迁`;
-    } else if (missionSectorId && !enemyManager.enemies.some((e) => e.sectorId === missionSectorId && e.mesh.position.distanceTo(shipPos) < 1200)) {
-      const mDef = SOLAR_BODIES.find((b) => b.id === missionSectorId);
-      if (mDef) {
-        this.warpPrompt.classList.remove('hidden');
-        this.warpPrompt.textContent = `任务目标在「${mDef.name}」— 按 [${warpKey}] 直接跃迁或 [${mapKey}] 打开星图`;
-      } else {
-        this.warpPrompt.classList.add('hidden');
-      }
+      setIdleWarpPrompt(
+        isGesture
+          ? `已锁定「${bestAimedBody.name}」— ${oHand}拇指食指捏住 0.45s 或按 [${warpKey}] 跃迁`
+          : `已锁定「${bestAimedBody.name}」— 按 [${warpKey}] 启动曲率跃迁`,
+        bestAimedBody.name
+      );
+    } else if (starMapLockedDef) {
+      setIdleWarpPrompt(
+        isGesture
+          ? `已预选星图航点「${starMapLockedDef.name}」— ${oHand}拇指食指捏住 0.45s 或按 [${warpKey}] 跃迁`
+          : `已预选星图航点「${starMapLockedDef.name}」— 按 [${warpKey}] 启动曲率跃迁`,
+        starMapLockedDef.name
+      );
+    } else if (missionAway && mDef) {
+      setIdleWarpPrompt(
+        isGesture
+          ? `任务目标在「${mDef.name}」— ${oHand}拇指食指捏住 0.45s 或按 [${warpKey}] 跃迁 / [${mapKey}] 星图`
+          : `任务目标在「${mDef.name}」— 按 [${warpKey}] 直接跃迁或 [${mapKey}] 打开星图`,
+        mDef.name
+      );
     } else {
+      clearWarpChargeUi();
       this.warpPrompt.classList.add('hidden');
     }
 
@@ -1566,5 +1737,453 @@ export class HUDManager {
     ctx.lineTo(half - 4, half + 4);
     ctx.closePath();
     ctx.fill();
+  }
+
+  _restoreGestureWeaponLabels(keybinds) {
+    if (!keybinds) return;
+    this._setText(this.elLblBoostKey, `脉冲电容 BOOST [${keybinds.getLabel('boost')}]`);
+    this._setText(this.elLblPrimaryKey, `[${keybinds.getLabel('firePrimary')}] 双联脉冲激光`);
+    this._setText(this.elLblSecondaryKey, `[${keybinds.getLabel('fireSecondary')} / R] 伽马粒子光矛`);
+    this._setText(this.elLblMissileKey, `[${keybinds.getLabel('missiles')}] 蜂群追踪导弹`);
+    this._setText(this.elLblEmpKey, `[${keybinds.getLabel('emp')}] EMP 震荡波`);
+  }
+
+  _poseDisplayLabel(pose) {
+    switch (pose) {
+      case 'FIST': return '普攻';
+      case 'FINGER_1': return '光矛';
+      case 'FINGER_2': return '导弹';
+      case 'FINGER_3': return 'EMP';
+      case 'PINCH': return '捏合跃迁';
+      case 'POINT_ROTATE': return '1指精瞄';
+      case 'FULL_FIST': return '冲刺';
+      case 'THUMB_LEFT': return '左翻滚';
+      case 'THUMB_RIGHT': return '右翻滚';
+      case 'OPEN_PALM': return '张掌';
+      case 'TRANSITION': return '过渡';
+      default: return '待命';
+    }
+  }
+
+  updateGesturePiP(snapshot, controlMode = 'KBM', keybinds = null, { flightHand = 'LEFT' } = {}) {
+    const activeGesture = controlMode === 'GESTURE';
+    this.hudRoot?.classList.toggle('gesture-active', activeGesture);
+    this._lastFlightHand = snapshot?.flightHand || flightHand || this._lastFlightHand || 'LEFT';
+
+    if (!activeGesture) {
+      this.elGesturePip?.classList.add('hidden');
+      this.elGesturePip?.classList.remove('is-firing', 'is-boosting');
+      for (const chip of this._gagChips.values()) chip.classList.remove('is-active');
+      if (this._wasGestureHud) {
+        this._wasGestureHud = false;
+        this._lastGestureDrawSig = '';
+        this._restoreGestureWeaponLabels(keybinds);
+        if (this.gestureOverlayCtx) {
+          this.gestureOverlayCtx.clearRect(0, 0, this._gestureLogicalW || 214, this._gestureLogicalH || 136);
+        }
+      }
+      return;
+    }
+
+    const activeFlightSide = snapshot?.flightHand || flightHand || 'LEFT';
+    const fHand = activeFlightSide === 'LEFT' ? '左手' : '右手';
+    const oHand = activeFlightSide === 'LEFT' ? '右手' : '左手';
+
+    this._wasGestureHud = true;
+    this.elGesturePip?.classList.remove('hidden');
+    this._setText(this.elLblBoostKey, `脉冲电容 BOOST [${fHand}握紧全拳]`);
+    this._setText(this.elLblPrimaryKey, `[${oHand}握拳] 双联脉冲激光`);
+    this._setText(this.elLblSecondaryKey, `[${oHand}1指] 伽马粒子光矛`);
+    this._setText(this.elLblMissileKey, `[${oHand}2指] 蜂群追踪导弹`);
+    this._setText(this.elLblEmpKey, `[${oHand}3指] EMP 震荡波`);
+
+    const sideLabel = activeFlightSide === 'LEFT' ? '左飞' : '右飞';
+    this._setText(this.elBtnGestureFlightHand, sideLabel);
+    this._setText(this.elGagFlightRole, fHand);
+    this._setText(this.elGagOpsRole, oHand);
+
+    const dpr = Math.min(window.devicePixelRatio || 1, this._maxPixelRatio);
+    this._sizeGestureOverlayCanvas(dpr);
+
+    const phase = snapshot?.phase || 'LOADING';
+    const firingPrimary = Boolean(snapshot?.firePrimary);
+    const firingSecondary = Boolean(snapshot?.fireSecondary);
+    const firingAny = firingPrimary || firingSecondary;
+    const boosting = Boolean(snapshot?.boost);
+    this.elGesturePip?.classList.toggle('is-firing', firingAny);
+    this.elGesturePip?.classList.toggle('is-boosting', boosting);
+
+    const flightTracked = snapshot?.flightStatus?.tracked ?? Boolean(snapshot?.tracking);
+    const opsTracked = snapshot?.opsStatus?.tracked ?? false;
+    const opsArmed = snapshot?.opsStatus?.armed ?? !snapshot?.requireOpenPalmToArm;
+    const opsPose = snapshot?.opsStatus?.pose || snapshot?.pose || 'NONE';
+
+    let statusText = '启动摄像头与双手模型...';
+    let dotClass = 'dot-loading';
+    if (phase === 'ERROR') {
+      statusText = snapshot?.errorMessage || '摄像头不可用';
+      dotClass = 'dot-error';
+    } else if (phase === 'CALIBRATING' || (phase === 'READY' && !snapshot?.calibrated)) {
+      const pct = Math.round(Math.max(0, Math.min(1, snapshot?.calibrationProgress || 0)) * 100);
+      statusText = snapshot?.calibrationHint || (pct > 0 ? `${fHand}飞控校准 ${pct}%` : `举${fHand}(飞控)张掌校准`);
+      dotClass = 'dot-calibrating';
+    } else if (phase === 'LOST_GRACE' || phase === 'LOST') {
+      statusText = '双手未入镜 · 已归零';
+      dotClass = 'dot-lost';
+    } else if (phase === 'ACTIVE') {
+      if (snapshot?.crossingGuard) {
+        statusText = '双手交叉保护 · 已停火';
+        dotClass = 'dot-lost';
+      } else if (snapshot?.contextMode === 'UPGRADE') {
+        const sel = snapshot?.upgradeSelection;
+        if (!opsTracked) {
+          statusText = `升级: ${oHand}(火控)未入镜`;
+          dotClass = 'dot-lost';
+        } else if (!sel?.unlocked) {
+          statusText = `升级: ${oHand}张掌解锁`;
+          dotClass = 'dot-calibrating';
+        } else if (Number.isInteger(sel?.candidateIndex) && sel.candidateIndex >= 0) {
+          const pct = Math.round(Math.max(0, Math.min(1, Number(sel.holdProgress) || 0)) * 100);
+          statusText = `选卡 [${sel.candidateIndex + 1}] ${pct}%`;
+          dotClass = 'dot-active';
+        } else {
+          statusText = `升级: ${oHand}伸 1/2/3 指`;
+          dotClass = 'dot-active';
+        }
+      } else if (!flightTracked && !opsTracked) {
+        statusText = '未检测到手 · 已归零';
+        dotClass = 'dot-lost';
+      } else if (!flightTracked && opsTracked) {
+        statusText = opsArmed ? `${fHand}离镜(悬停) · ${oHand}可用` : `${fHand}离镜 · ${oHand}张掌解锁`;
+        dotClass = 'dot-calibrating';
+      } else if (snapshot?.pendingGestureHint) {
+        statusText = snapshot.pendingGestureHint;
+        dotClass = 'dot-calibrating';
+      } else if (flightTracked && !opsTracked) {
+        statusText = boosting ? `${fHand}冲刺中 · ${oHand}未入镜` : `${fHand}在线 · ${oHand}(火控)未入镜`;
+        dotClass = 'dot-calibrating';
+      } else if (!opsArmed) {
+        statusText = boosting ? `${fHand}冲刺中 · ${oHand}张掌解锁` : `请${oHand}(火控)张掌解锁`;
+        dotClass = 'dot-calibrating';
+      } else if (boosting) {
+        const boostTag = '全拳冲刺';
+        const wpnTag = firingAny ? ` + ${this._poseDisplayLabel(opsPose)}` : '';
+        statusText = `${fHand}${boostTag}${wpnTag}`;
+        dotClass = firingAny ? 'dot-firing' : 'dot-active';
+      } else if (firingPrimary) {
+        statusText = `${oHand}握拳 · 脉冲激光`;
+        dotClass = 'dot-firing';
+      } else if (firingSecondary || opsPose === 'FINGER_1') {
+        statusText = `${oHand}1指 · 伽马光矛`;
+        dotClass = 'dot-firing';
+      } else if (opsPose === 'FINGER_2' || opsPose === 'FINGER_3') {
+        statusText = `${oHand} · ${this._poseDisplayLabel(opsPose)}`;
+        dotClass = 'dot-firing';
+      } else if (snapshot?.actionHint) {
+        statusText = snapshot.actionHint;
+        dotClass = 'dot-calibrating';
+      } else {
+        statusText = snapshot?.calibrationHint || `${fHand}飞控 · ${oHand}火控就绪`;
+        dotClass = 'dot-active';
+      }
+    }
+
+    this._setText(this.elGestureStatusText, statusText);
+    if (this.elGestureDot) {
+      this.elGestureDot.className = `gesture-dot ${dotClass}`;
+    }
+
+    if (this.elGestureCalTrack && this.elGestureCalFill) {
+      const showCal = phase === 'CALIBRATING';
+      this.elGestureCalTrack.classList.toggle('hidden', !showCal);
+      if (showCal) {
+        const pct = Math.round(Math.max(0, Math.min(1, snapshot?.calibrationProgress || 0)) * 100);
+        this.elGestureCalFill.style.width = `${pct}%`;
+      }
+    }
+
+    const nowMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const dodgeSum = (snapshot?.events?.dodgeLeft || 0) + (snapshot?.events?.dodgeRight || 0);
+    if (this._lastGestureDodgeSum !== undefined && dodgeSum > this._lastGestureDodgeSum) {
+      this._dodgeChipFlashUntil = nowMs + 500;
+    }
+    this._lastGestureDodgeSum = dodgeSum;
+
+    const moving = flightTracked && (Math.abs(snapshot?.throttle || 0) > 0.05 || Math.abs(snapshot?.aimX || 0) > 0.05 || Math.abs(snapshot?.aimY || 0) > 0.05);
+    const pointRotating = flightTracked && snapshot?.flightPose === 'POINT_ROTATE';
+    const pendingStr = snapshot?.pendingGestureHint || '';
+    const chipStates = {
+      move: moving && !pointRotating,
+      point: pointRotating,
+      boost: boosting,
+      dodge: pendingStr.includes('翻滚') || pendingStr.includes('摆') || (this._dodgeChipFlashUntil || 0) > nowMs,
+      fist: firingPrimary,
+      f1: firingSecondary || (opsArmed && opsPose === 'FINGER_1'),
+      f2: opsArmed && opsPose === 'FINGER_2',
+      f3: opsArmed && opsPose === 'FINGER_3',
+      warp: (Number(snapshot?.warpChargeProgress) || 0) > 0 || pendingStr.includes('跃迁') || pendingStr.includes('捏合'),
+    };
+    for (const [key, el] of this._gagChips.entries()) {
+      el.classList.toggle('is-active', Boolean(chipStates[key]));
+    }
+
+    const fmtSignedPct = (v) => {
+      const n = Math.round((Number.isFinite(v) ? v : 0) * 100);
+      return n > 0 ? `+${n}%` : `${n}%`;
+    };
+    const thrVal = Number(snapshot?.throttle ?? 0);
+    const thrText = flightTracked
+      ? (pointRotating
+          ? '1指精瞄'
+          : boosting
+            ? '⚡全拳冲刺'
+            : Math.abs(thrVal) <= 0.01
+              ? '停止'
+              : thrVal >= 0.40
+                ? `半握 +${Math.round(thrVal * 100)}%`
+                : fmtSignedPct(thrVal))
+      : '悬停';
+    const opsText = opsTracked ? (opsArmed ? this._poseDisplayLabel(opsPose) : '待张掌') : '离线';
+    this._setText(
+      this.elGestureTelemetry,
+      `${fHand} ${thrText} · ${oHand} ${opsText}`
+    );
+
+    this._drawGestureOverlay(snapshot);
+  }
+
+  _drawGestureOverlay(snapshot) {
+    const ctx = this.gestureOverlayCtx;
+    if (!ctx) return;
+
+    const w = this._gestureLogicalW || 214;
+    const h = this._gestureLogicalH || 136;
+    const vw = Math.max(1, Number(this.elGestureVideo?.videoWidth) || Number(snapshot?.videoWidth) || 480);
+    const vh = Math.max(1, Number(this.elGestureVideo?.videoHeight) || Number(snapshot?.videoHeight) || 360);
+    const calPct = Math.round((snapshot?.calibrationProgress || 0) * 100);
+    const overlaySig = Array.isArray(snapshot?.handsOverlay)
+      ? snapshot.handsOverlay.map((item) => `${item.role}:${item.pose}:${item.firing ? 1 : 0}:${item.boosting ? 1 : 0}:${item.landmarksMirrored?.length || 0}`).join(',')
+      : String(snapshot?.landmarksMirrored?.length || 0);
+    const sig = [
+      snapshot?.seq ?? '',
+      snapshot?.timestampMs ?? '',
+      snapshot?.phase ?? 'NONE',
+      snapshot?.pose ?? '',
+      snapshot?.firePrimary ? 1 : 0,
+      snapshot?.fireSecondary ? 1 : 0,
+      snapshot?.boost ? 1 : 0,
+      snapshot?.boostSource ?? '',
+      snapshot?.crossingGuard ? 1 : 0,
+      snapshot?.requireOpenPalmToArm ? 1 : 0,
+      Math.round((snapshot?.upgradeSelection?.holdProgress || 0) * 100),
+      calPct,
+      Math.round((snapshot?.aimX || 0) * 200),
+      Math.round((snapshot?.aimY || 0) * 200),
+      Math.round((snapshot?.throttle || 0) * 200),
+      Math.round((snapshot?.debug?.boostHoldMs || 0) / 10),
+      overlaySig,
+      `${vw}x${vh}`,
+      `${w}x${h}`,
+    ].join('|');
+
+    if (sig === this._lastGestureDrawSig) return;
+    this._lastGestureDrawSig = sig;
+
+    ctx.clearRect(0, 0, w, h);
+
+    // Match CSS object-fit: contain letterbox geometry 1:1 on the non-CSS-mirrored overlay canvas
+    const scale = Math.min(w / vw, h / vh);
+    const drawW = vw * scale;
+    const drawH = vh * scale;
+    const drawX = (w - drawW) * 0.5;
+    const drawY = (h - drawH) * 0.5;
+    const toPx = (nx, ny) => [drawX + nx * drawW, drawY + ny * drawH];
+
+    // Subtle letterbox frame
+    ctx.strokeStyle = 'rgba(143, 212, 236, 0.16)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(drawX + 0.5, drawY + 0.5, Math.max(0, drawW - 1), Math.max(0, drawH - 1));
+
+    const phase = snapshot?.phase || 'LOADING';
+    const flightSide = snapshot?.flightHand || 'LEFT';
+    const defaultNeutralX = flightSide === 'LEFT' ? 0.28 : 0.72;
+    const neutral = snapshot?.neutralMirrored || { x: defaultNeutralX, y: 0.5 };
+    const [nxPx, nyPx] = toPx(neutral.x, neutral.y);
+
+    if (phase === 'CALIBRATING' || (phase === 'READY' && !snapshot?.calibrated)) {
+      const boxW = drawW * 0.38;
+      const boxH = drawH * 0.62;
+      const calLabel = flightSide === 'LEFT' ? '举左手张掌' : '举右手张掌';
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255, 217, 94, 0.78)';
+      ctx.setLineDash([4, 3]);
+      ctx.lineWidth = 1.2;
+      ctx.strokeRect(nxPx - boxW * 0.5, nyPx - boxH * 0.5, boxW, boxH);
+      ctx.setLineDash([]);
+      ctx.font = 'bold 9.5px "Microsoft YaHei UI", "Segoe UI", sans-serif';
+      ctx.fillStyle = 'rgba(255, 224, 118, 0.92)';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(calLabel, nxPx, nyPx);
+      ctx.restore();
+    }
+
+    const handsList = Array.isArray(snapshot?.handsOverlay) && snapshot.handsOverlay.length > 0
+      ? snapshot.handsOverlay
+      : (Array.isArray(snapshot?.landmarksMirrored) && snapshot.landmarksMirrored.length >= 21
+        ? [{
+            role: 'FLIGHT',
+            anchorMirrored: snapshot.anchorMirrored || null,
+            landmarksMirrored: snapshot.landmarksMirrored,
+            pose: snapshot.pose || 'NONE',
+            firing: Boolean(snapshot.firePrimary || snapshot.fireSecondary),
+            boosting: Boolean(snapshot.boost),
+          }]
+        : []);
+
+    const chains = [
+      [0, 1, 2, 3, 4],
+      [0, 5, 6, 7, 8],
+      [9, 10, 11, 12],
+      [13, 14, 15, 16],
+      [0, 17, 18, 19, 20],
+      [5, 9, 13, 17],
+    ];
+
+    for (const handItem of handsList) {
+      const lms = handItem?.landmarksMirrored;
+      if (!Array.isArray(lms) || lms.length < 21) continue;
+      const role = handItem.role || 'FLIGHT';
+      const isOps = role === 'OPS';
+      const isUnassigned = role === 'UNASSIGNED';
+      const boneCol = isUnassigned
+        ? 'rgba(155, 170, 190, 0.65)'
+        : isOps
+          ? (handItem.firing ? 'rgba(255, 108, 76, 0.94)' : 'rgba(255, 196, 92, 0.88)')
+          : (handItem.boosting ? 'rgba(56, 242, 148, 0.96)' : 'rgba(76, 232, 255, 0.88)');
+      const palmCoreCol = isUnassigned
+        ? 'rgba(180, 195, 210, 0.85)'
+        : isOps
+          ? '#ffd95e'
+          : (handItem.boosting ? '#7effbe' : '#38f294');
+
+      ctx.save();
+      ctx.strokeStyle = boneCol;
+      ctx.lineWidth = 1.3;
+      for (const chain of chains) {
+        ctx.beginPath();
+        chain.forEach((idx, i) => {
+          const [px, py] = toPx(lms[idx].x, lms[idx].y);
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        });
+        ctx.stroke();
+      }
+
+      ctx.fillStyle = palmCoreCol;
+      for (const idx of [5, 9, 17]) {
+        const [px, py] = toPx(lms[idx].x, lms[idx].y);
+        ctx.beginPath();
+        ctx.arc(px, py, 2.0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.fillStyle = boneCol;
+      for (const idx of [4, 8, 12, 16, 20]) {
+        const [px, py] = toPx(lms[idx].x, lms[idx].y);
+        ctx.beginPath();
+        ctx.arc(px, py, 1.6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      const wrist = lms[0];
+      const [wx, wy] = toPx(wrist.x, wrist.y);
+      const flightSpecial = handItem.pose === 'POINT_ROTATE' || handItem.pose === 'FULL_FIST' || handItem.pose === 'THUMB_LEFT' || handItem.pose === 'THUMB_RIGHT';
+      const badgeText = isUnassigned
+        ? '待认'
+        : isOps
+          ? `火·${this._poseDisplayLabel(handItem.pose)}`
+          : (handItem.pose === 'POINT_ROTATE'
+              ? '飞·1指精瞄'
+              : (flightSpecial ? `飞·${this._poseDisplayLabel(handItem.pose)}` : '飞控'));
+      ctx.font = 'bold 8.5px "Microsoft YaHei UI", "Segoe UI", sans-serif';
+      const bw = ctx.measureText(badgeText).width + 6;
+      const bx = Math.max(2, Math.min(w - bw - 14, wx - bw * 0.5));
+      const by = Math.max(2, Math.min(h - 13, wy - 12));
+      ctx.fillStyle = 'rgba(3, 11, 22, 0.78)';
+      ctx.fillRect(bx, by, bw, 11);
+      ctx.fillStyle = boneCol;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.fillText(badgeText, bx + 3, by + 1);
+      ctx.restore();
+    }
+
+    // Live finger/fist orientation arrow on Flight skeleton (no floating dot anywhere)
+    const flightOverlay = handsList.find((item) => item.role === 'FLIGHT');
+    const flightTracked = snapshot?.flightStatus
+      ? Boolean(snapshot.flightStatus.tracked)
+      : Boolean(flightOverlay || snapshot?.tracking);
+    const flightLms = flightOverlay?.landmarksMirrored;
+    const axisAng = snapshot?.debug?.steerAxisAngle;
+    if (flightTracked && snapshot?.calibrated && Array.isArray(flightLms) && flightLms.length >= 21 && Number.isFinite(axisAng)) {
+      const [kx, ky] = toPx(
+        0.5 * flightLms[9].x + 0.25 * (flightLms[5].x + flightLms[17].x),
+        0.5 * flightLms[9].y + 0.25 * (flightLms[5].y + flightLms[17].y),
+      );
+      const rayLen = 20;
+      const ex = kx + Math.sin(axisAng) * rayLen;
+      const ey = ky - Math.cos(axisAng) * rayLen;
+      const head = 5;
+      const rayAng = Math.atan2(ey - ky, ex - kx);
+      ctx.save();
+      ctx.strokeStyle = snapshot?.boost ? 'rgba(56, 242, 148, 0.90)' : 'rgba(255, 224, 102, 0.85)';
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.moveTo(kx, ky);
+      ctx.lineTo(ex, ey);
+      ctx.lineTo(ex - Math.cos(rayAng - 0.55) * head, ey - Math.sin(rayAng - 0.55) * head);
+      ctx.moveTo(ex, ey);
+      ctx.lineTo(ex - Math.cos(rayAng + 0.55) * head, ey - Math.sin(rayAng + 0.55) * head);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // Compact vertical throttle + boost tier gauge on the right edge
+    const barX = w - 9;
+    const barTop = 10;
+    const barH = Math.max(24, h - 20);
+    const barMid = barTop + barH * 0.5;
+    const boostCapH = Math.max(8, Math.round(barH * 0.14));
+    const cruiseTop = barTop + boostCapH;
+    const cruiseSpan = barMid - cruiseTop;
+    const thr = Math.max(-1, Math.min(1, Number(snapshot?.throttle) || 0));
+    const boosting = Boolean(snapshot?.boost);
+    ctx.save();
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.10)';
+    ctx.fillRect(barX, barTop, 4, barH);
+    ctx.fillStyle = 'rgba(143, 212, 236, 0.45)';
+    ctx.fillRect(barX - 1, barMid - 0.5, 6, 1);
+    ctx.fillStyle = 'rgba(56, 242, 148, 0.55)';
+    ctx.fillRect(barX - 1, cruiseTop - 0.5, 6, 1);
+    if (thr < -0.01) {
+      const revH = Math.abs(thr) * (barH * 0.5);
+      ctx.fillStyle = '#ffb444';
+      ctx.fillRect(barX, barMid, 4, revH);
+    } else if (thr > 0.01) {
+      const fwdH = thr * cruiseSpan;
+      ctx.fillStyle = '#4ce8ff';
+      ctx.fillRect(barX, barMid - fwdH, 4, fwdH);
+    }
+    if (boosting) {
+      ctx.fillStyle = '#38f294';
+      ctx.fillRect(barX, barTop, 4, boostCapH);
+    } else if ((snapshot?.debug?.boostHoldMs || 0) > 0) {
+      const ratio = Math.min(1, snapshot.debug.boostHoldMs / 110);
+      const bh = ratio * boostCapH;
+      ctx.fillStyle = 'rgba(56, 242, 148, 0.72)';
+      ctx.fillRect(barX, cruiseTop - bh, 4, bh);
+    }
+    ctx.restore();
   }
 }

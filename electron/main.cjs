@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, protocol, session } = require('electron');
+const { app, BrowserWindow, Menu, protocol, session, systemPreferences } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -7,6 +7,7 @@ const DIST_DIR = path.resolve(__dirname, '..', 'dist');
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  '.cjs': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml',
@@ -16,9 +17,27 @@ const MIME_TYPES = {
   '.webp': 'image/webp',
   '.json': 'application/json; charset=utf-8',
   '.wasm': 'application/wasm',
+  '.task': 'application/octet-stream',
   '.ico': 'image/x-icon',
   '.woff2': 'font/woff2',
 };
+
+function isTrustedAppOrigin(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== 'string') return false;
+  try {
+    const u = new URL(rawUrl);
+    return u.protocol === 'app:' && u.hostname === 'solaris';
+  } catch (_) {
+    return false;
+  }
+}
+
+function isTrustedTopLevel(wc, candidateUrl) {
+  if (!wc || wc.isDestroyed()) return false;
+  if (!isTrustedAppOrigin(wc.getURL())) return false;
+  if (candidateUrl && !isTrustedAppOrigin(candidateUrl)) return false;
+  return true;
+}
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -74,11 +93,62 @@ if (!gotLock) {
       }
     });
 
-    session.defaultSession.setPermissionCheckHandler((_wc, permission) => {
-      return permission === 'pointerLock' || permission === 'fullscreen';
+    session.defaultSession.setPermissionCheckHandler((wc, permission, requestingOrigin, details) => {
+      if (details && details.isMainFrame === false) return false;
+      const checkUrl = details?.securityOrigin || requestingOrigin;
+      if (!isTrustedTopLevel(wc, checkUrl)) return false;
+      if (permission === 'pointerLock' || permission === 'fullscreen') return true;
+      if (permission === 'media') {
+        if (details?.mediaType !== 'video') return false;
+        if (process.platform === 'darwin') {
+          const status = systemPreferences.getMediaAccessStatus('camera');
+          return status === 'granted' || status === 'not-determined';
+        }
+        return true;
+      }
+      return false;
     });
-    session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
-      callback(permission === 'pointerLock' || permission === 'fullscreen');
+    session.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
+      if (details && details.isMainFrame === false) {
+        callback(false);
+        return;
+      }
+      const reqUrl = details?.requestingUrl || details?.securityOrigin || '';
+      if (!isTrustedTopLevel(wc, reqUrl)) {
+        callback(false);
+        return;
+      }
+      if (permission === 'pointerLock' || permission === 'fullscreen') {
+        callback(true);
+        return;
+      }
+      if (permission === 'media') {
+        const mediaTypes = Array.isArray(details?.mediaTypes) ? details.mediaTypes : [];
+        const videoOnly = mediaTypes.length > 0 && mediaTypes.every((t) => t === 'video');
+        if (!videoOnly) {
+          callback(false);
+          return;
+        }
+        if (process.platform === 'darwin') {
+          const status = systemPreferences.getMediaAccessStatus('camera');
+          if (status === 'granted') {
+            callback(true);
+            return;
+          }
+          if (status === 'not-determined') {
+            systemPreferences
+              .askForMediaAccess('camera')
+              .then((allowed) => callback(Boolean(allowed)))
+              .catch(() => callback(false));
+            return;
+          }
+          callback(false);
+          return;
+        }
+        callback(true);
+        return;
+      }
+      callback(false);
     });
 
     Menu.setApplicationMenu(null);

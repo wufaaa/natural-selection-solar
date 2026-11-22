@@ -1,9 +1,21 @@
+const gestureHeldActions = ['firePrimary', 'fireSecondary', 'boost'];
+const gesturePulseActions = {
+  missiles: 'missiles', emp: 'emp', gestureWarp: 'warp', dodgeLeft: 'dodgeLeft', dodgeRight: 'dodgeRight',
+};
+const clampAxis = (value) => Number.isFinite(value) ? Math.max(-1, Math.min(1, value)) : 0;
+
 export class InputManager {
   constructor(domElement, keybinds = null) {
     this.domElement = domElement;
     this.keybinds = keybinds;
     this.keys = new Set();
     this.justPressed = new Set();
+    this.controlMode = 'KBM';
+    this._gestureDown = new Set();
+    this._gestureJustPressed = new Set();
+    this._gestureEpoch = null;
+    this._gestureCounters = null;
+    this.clearGestureInput();
 
     // Virtual flight stick [-1, 1] separated cleanly between mouse and gamepad sources
     this.mouseAimX = 0;
@@ -37,6 +49,11 @@ export class InputManager {
   }
 
   _syncAim() {
+    if (this.controlMode === 'GESTURE') {
+      this.aimX = this.gestureAimX;
+      this.aimY = this.gestureAimY;
+      return;
+    }
     this.aimX = Math.max(-1, Math.min(1, this.mouseAimX + this.gpAimX));
     this.aimY = Math.max(-1, Math.min(1, this.mouseAimY + this.gpAimY));
   }
@@ -105,10 +122,15 @@ export class InputManager {
       this.gpAimY = 0;
       this.aimX = 0;
       this.aimY = 0;
+      this.deltaX = 0;
+      this.deltaY = 0;
+      this.clearGestureInput();
     });
 
     document.addEventListener('pointerlockchange', () => {
-      this.pointerLocked = document.pointerLockElement === this.domElement;
+      const ownsLock = document.pointerLockElement === this.domElement;
+      this.pointerLocked = ownsLock && this.controlMode !== 'GESTURE';
+      if (ownsLock && this.controlMode === 'GESTURE') document.exitPointerLock?.();
       // Always discard queued delta/aim residue across lock transitions to prevent 1-frame camera spins
       this.deltaX = 0;
       this.deltaY = 0;
@@ -119,7 +141,7 @@ export class InputManager {
 
     document.addEventListener('pointerlockerror', () => {
       this.pointerLocked = false;
-      this.onLockDenied?.();
+      if (this.controlMode !== 'GESTURE') this.onLockDenied?.();
     });
 
     // Global capture-phase mouse handler for middle click, side buttons (Mouse3/Mouse4), and keybind capture
@@ -141,6 +163,7 @@ export class InputManager {
         if (e.button === 1 || e.button === 2 || e.button === 3 || e.button === 4) {
           e.preventDefault();
         }
+        if (this.controlMode === 'GESTURE') return;
 
         const mCode = `Mouse${e.button}`;
         if (!this.keys.has(mCode)) {
@@ -235,7 +258,7 @@ export class InputManager {
     this.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 
     window.addEventListener('mousemove', (e) => {
-      if (!this.enabled) return;
+      if (!this.enabled || this.controlMode === 'GESTURE') return;
       if (this.pointerLocked) {
         // Filter out Chromium Windows Pointer Lock cursor-warp outlier spikes (>260px in a single event)
         if (Math.abs(e.movementX) > 260 || Math.abs(e.movementY) > 260) return;
@@ -267,18 +290,76 @@ export class InputManager {
     this.aimY = 0;
     this.deltaX = 0;
     this.deltaY = 0;
+    this.clearGestureInput();
+  }
+
+  setControlMode(mode) {
+    if ((mode !== 'KBM' && mode !== 'GESTURE') || this.controlMode === mode) return;
+    this.controlMode = mode;
+    this._gestureEpoch = null;
+    this._gestureCounters = null;
+    this.releaseLock();
+    this.resetAim();
+    this._gpDown.clear();
+    this._gpPrevDown.clear();
+    this._gpJustPressed.clear();
+    for (let button = 0; button <= 5; button++) this.justPressed.delete(`Mouse${button}`);
+  }
+
+  setGestureInput({ aimX, aimY, throttle, firePrimary, fireSecondary, boost, snapshot = null }) {
+    if (this.controlMode !== 'GESTURE') return;
+    const flight = this.enabled && snapshot?.contextMode !== 'UPGRADE';
+    this.gestureAimX = flight ? clampAxis(aimX) : 0;
+    this.gestureAimY = flight ? clampAxis(aimY) : 0;
+    this.gestureThrottle = flight ? clampAxis(throttle) : 0;
+    this.gestureSnapshot = snapshot;
+    this._gestureDown.clear();
+    if (flight && firePrimary === true) this._gestureDown.add('firePrimary');
+    if (flight && fireSecondary === true) this._gestureDown.add('fireSecondary');
+    if (flight && boost === true) this._gestureDown.add('boost');
+
+    const canPulse = flight && snapshot?.phase === 'ACTIVE' && !snapshot.crossingGuard;
+    const newEpoch = this._gestureEpoch !== snapshot?.eventEpoch;
+    if (!canPulse || newEpoch) this._gestureJustPressed.clear();
+    if (canPulse && !newEpoch && snapshot.events && this._gestureCounters) {
+      for (const action in gesturePulseActions) {
+        const counter = gesturePulseActions[action];
+        if (snapshot.events[counter] > this._gestureCounters[counter]) this._gestureJustPressed.add(action);
+      }
+    }
+    this._gestureEpoch = snapshot?.eventEpoch;
+    this._gestureCounters = snapshot?.events ?? null;
+    this._syncAim();
+  }
+
+  clearGestureInput() {
+    this.gestureAimX = 0;
+    this.gestureAimY = 0;
+    this.gestureThrottle = 0;
+    this.gestureSnapshot = null;
+    this._gestureDown.clear();
+    this._gestureJustPressed.clear();
+    if (this.controlMode === 'GESTURE') this._syncAim();
+  }
+
+  getThrottleAxis() {
+    if (this.controlMode === 'GESTURE') return this.enabled ? this.gestureThrottle : 0;
+    return Number(this.isActionDown('thrustFwd')) - Number(this.isActionDown('thrustBack'));
   }
 
   get orbitLookActive() {
-    return this.keys.has('AltLeft') || this.keys.has('AltRight');
+    return this.controlMode !== 'GESTURE' && (this.keys.has('AltLeft') || this.keys.has('AltRight'));
   }
 
   requestLock() {
+    if (this.controlMode === 'GESTURE') return;
     if (this.domElement.requestPointerLock) {
       try {
         const p = this.domElement.requestPointerLock();
         if (p && typeof p.catch === 'function') {
-          p.catch(() => this.onLockDenied?.());
+          p.catch(() => {
+            if (this.controlMode !== 'GESTURE') this.onLockDenied?.();
+          });
         }
       } catch (_) {
         this.onLockDenied?.();
@@ -292,6 +373,7 @@ export class InputManager {
     }
     this.mouseButtons.left = false;
     this.mouseButtons.right = false;
+    this.clearGestureInput();
     this.gpAimX = 0;
     this.gpAimY = 0;
     this._syncAim();
@@ -307,6 +389,9 @@ export class InputManager {
   }
 
   isActionDown(action) {
+    if (this.controlMode === 'GESTURE' && gestureHeldActions.includes(action)) {
+      return this.enabled && this._gestureDown.has(action);
+    }
     if (this._gpDown.has(action)) return true;
     const code = this.keybinds ? this.keybinds.getCode(action) : null;
     if (!code) return false;
@@ -315,6 +400,9 @@ export class InputManager {
   }
 
   consumeAction(action) {
+    if (this.controlMode === 'GESTURE' && Object.hasOwn(gesturePulseActions, action)) {
+      return this.enabled && this._gestureJustPressed.delete(action);
+    }
     if (this._gpJustPressed.has(action)) {
       this._gpJustPressed.delete(action);
       return true;
@@ -327,7 +415,7 @@ export class InputManager {
 
   pollGamepad(dt) {
     this._gpDown.clear();
-    if (!this.enabled || typeof navigator === 'undefined' || !navigator.getGamepads) {
+    if (!this.enabled || this.controlMode === 'GESTURE' || typeof navigator === 'undefined' || !navigator.getGamepads) {
       this._gpPrevDown.clear();
       this._gpJustPressed.clear();
       if (this.gpAimX !== 0 || this.gpAimY !== 0) {
@@ -410,6 +498,8 @@ export class InputManager {
   }
 
   isDown(code) {
+    // The dedicated keyboard backup for gamma is only active in keyboard mode.
+    if (code === 'KeyR' && this.controlMode === 'GESTURE') return false;
     return this.keys.has(code);
   }
 }

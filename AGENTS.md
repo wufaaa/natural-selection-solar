@@ -11,12 +11,9 @@
 - **上游参考文件**（位于上一级工作区目录）：
   - `..\总工程书.md`（v3.0 3A 质量级架构与协同契约规范）
   - `..\worklogs\BOARD_STATUS.md` & `REPORT_*.md`（协同看板与三方验证日志）
-- **技术栈**：纯原生 ES Modules + **Three.js `^0.174.0`** + **Vite `^6.2.0`**（零前端框架）+ **Electron `^45.4.1`**（跨平台离线桌面应用壳）；全息 DOM/CSS 界面 + Canvas 2D 仪表盘/雷达/星图 + 纯 Web Audio API DSP 2-op FM/谐波音效与自适应配乐。
-- **代码与资产规模（v4.2 实测）**：
-  - `src/` 含 **24 个 `.js` 模块共 13,419 行** + `styles.css`，外加 `electron/main.cjs` 离线主进程、`index.html`、`vite.config.js` 与 `scripts/` 2 个 Python 工具脚本
-  - `public/assets/` 含 Draco 压缩舰船模型 `natural_selection.glb` 与 **16 张 2K–6K WebP 贴图**（NASA/ESO 实拍行星/太阳/银河等）+ `public/draco/gltf/` 解码器
-- **当前 v4.2 AAA 交付状态**：
-  - 在 v4.0 全链路玩法与 3A 全息 UI/座舱基础上，v4.2 完成了 Stage 5 **纯激光零穿模与全武器特效升级**（前向十字光带/聚能星芒、双螺旋光矛+灼点、16 段三维导弹网格尾迹、六边形 EMP 穹顶与 8 电弧、恒星超载脉冲）、**AudioEngine 2-op FM+滤波谐波重构**（彻底消除高频白噪“喷水/尿尿”感与 WaveShaper 直流偏置、四档命中反馈零白噪），并封装为 **跨电脑免浏览器离线桌面应用**（Windows 单文件便携版 `release/NaturalSelectionSolar-Portable-x64.exe` 实机 `app://solaris/index.html` 跑通 `p50 163.9 FPS` / 0 报错，同时内置 macOS 构建配置与 GitHub Actions 工作流）。
+- **技术栈**：纯原生 ES Modules + **Three.js `^0.174.0`** + **Vite `^6.2.0`**（零前端框架）+ **Electron `^45.4.1`**（跨平台离线桌面应用壳）+ **`@mediapipe/tasks-vision@1.2.3`**（Classic Web Worker 全离线本地双手飞火分离手势飞控）；全息 DOM/CSS 界面 + Canvas 2D 仪表盘/雷达/星图 + 纯 Web Audio API DSP 2-op FM/谐波音效与自适应配乐。
+- **当前 v4.4.1 AAA 交付状态**：
+  - 在 v4.3 基础上，v4.4.1 全面升级为 **全离线双手飞火分离手势系统 (`handMode: 'DUAL'`, 默认左手飞控 / 右手火控)**：左手支持张掌停船（`0 km/s`）、3 维度剖面 `gripTightness` 精确区分半握巡航（`2,000–3,000 km/s`）与紧握全拳直接冲刺（`FULL_FIST`, `5,390 km/s`）、纯手指/拳头方向球面仰俯转向（含 `10°` 死区拳头 3D 拧转辅助、双区 `1.85 / 2.0` S 曲线及温和准星磁吸），以及 **1 指原地精瞄 (`POINT_ROTATE`, `throttle=0`)** 与 3D 防误触拇指左右翻滚；PiP 仅渲染洁净手骨与指根实时方向箭头（零漂浮圆环/圆点）；右手负责自然握拳普攻、1/2/3 指光矛/导弹/EMP、显式锁星 `450 ms` 捏合跃迁及跨批次升级 3 选 1 选卡。免安装版 [NaturalSelectionSolar.exe](file:///c:/Users/LCB/Desktop/gpt、Gemini、ds/natural-selection-solar/release/win-unpacked/NaturalSelectionSolar.exe)（`249,978,368 B`）已过 `audit_v44_core.mjs`、`node --check` 33/33 与 CDP 6 视角终验（`app://solaris/index.html` **`163.9 FPS` / 0 报错 / 6 视角零重叠 / `EXES=0 LISTENING=0`**）；推送标签 `v4.4.1` 至 GitHub 后将由 `.github/workflows/build-desktop.yml` 自动云构建双端便携 `.exe` 与 macOS `.dmg`/`.zip` Release。
 
 ---
 
@@ -155,7 +152,15 @@ npm.cmd run desktop:build
 
 ---
 
-## 7. v4.0 → v4.2 交付与核心契约增量
+## 7. v4.0 → v4.4.1 交付与核心契约增量
+
+- **v4.4.1（双手飞火分离 + 纯手指/拳头方向球面精准转向 & 全拳冲刺，Codex + Gemini 协同待发版）**：
+  - **飞控算法与预检容错 (`src/input/GestureMath.js` / `HandGestureController.js` / `public/mediapipe/hand.worker.js`)**：强制 `handMode = 'DUAL'`（默认 `LEFT` 飞控、可一键切换）；Worker 检测/追踪阈值降至 `0.42 / 0.42 / 0.38`，放宽结果接受窗（`>= 280 ms`）与取帧间隔（`120 ms`），预检放宽至 `550 ms` / `curlScore <= 0.44` / `facing >= 0.42` / `lostMs: 240`。彻底移除平移控向、腕点 `0` 抖动敏感与大倾角奇异点：以中心加权 `[0.25, 0.45, 0.22, 0.08]` 纯 2D 手指倾角平滑过渡至抗偏航透视掌骨轴并叠加 `>10°` 拳头 3D 拧转辅助（`openBlend < 0.65`），俯仰采用三维球面 `elevation(vector)`（仅直指 `gripTightness < 0.20` 时融合四指，消除半握弯指俯冲及 `atan2(p[2], p[1])` 大倾角奇异俯冲）并配 2D 下指补充与静止张掌 `0.65s` 自动微平。改用指腕/指掌心/指节角三合一 `gripTightness` 精确区分张掌停船（`<= 0.18 -> 0 km/s`）、半握巡航（`0.38..0.65 -> 2,000–3,000 km/s`）与紧握全拳直接冲刺（`>= 0.76` 且三指 `>= 0.70` 持留 `90 ms -> FULL_FIST` `5,390 km/s`）；配 `1.85`（1 指精瞄 `2.0 * 0.62`、`throttle = 0`）S 曲线与 `OneEuroFilter(4.5, 6.0)`、及 3D 外伸守卫拇指左右翻滚（`140 ms` 回正保护）。右手承担自然握拳普攻、1/2/3 指副武器、显式锁星 `450 ms` 捏合跃迁及 `UPGRADE` 选卡。
+  - **操控倍率、磁吸与全息界面 (`NaturalSelectionShip.js` / `Constants.js` / `HUDManager.js` / `styles.css` / `index.html` / `KeybindUI.js` / `KeybindManager.js` / `main.js`)**：手势非冲刺满油门上限设为 `255`（`3,570 km/s`）、默认灵敏度 `1.0`、手势转向阻尼提至 `26 / 32` 消除甩尾，`main.js` 在 `GESTURE` 锁敌且微操区（`steerMag < 0.42`）接入温和准星磁吸；PiP **彻底删除腕部圆点与角落姿态圆环**，保留洁净手骨与指根实时方向箭头，并上线 `~22°/28°` 粘性锁星及捏合线性进度条。终版免安装 `NaturalSelectionSolar.exe`（`249,978,368 B`）已过 `audit_v44_core.mjs`、`node --check` 33/33 与 CDP 6 视角实测（`163.9 FPS` / `0` 报错 / `0` 重叠 / `EXES=0`）；便携单文件由 GitHub Tag `v4.4.1` 触发 CI 构建。
+
+- **v4.3 Stage 6（单手摄像头手势飞控，Gemini + Codex 双人交付）**：
+  - **手势解算与 Classic Worker 离线推理 (`src/input/GestureMath.js` / `HandGestureController.js` / `public/mediapipe/*` / `scripts/sync-mediapipe-assets.mjs`)**：锁定 `@mediapipe/tasks-vision@1.2.3`，0.8s 单手张掌自动校准、掌骨核 `0/5/9/17` 稳定锚点、3D 补偿正交双轴对数尺度前后推力+偏斜保护、径向组合转向、One-Euro 自适应滤波、张掌/握拳滞回开火，Classic Worker 单帧 `ImageBitmap` 背压 + GPU 失败自动回退 CPU，全轴支持 `100 ms` 停火 / `180 ms` 归零与代次拦截迟到流。
+  - **输入与 HUD / Electron 权限总装 (`InputManager.js` / `NaturalSelectionShip.js` / `Constants.js` / `KeybindManager.js` / `KeybindUI.js` / `HUDManager.js` / `electron/main.cjs` / `main.js`)**：`GESTURE` 模式下 `firePrimary` 由手势独占并置零键鼠/手柄瞄准；连续油门乘算且保留 `KBM ±1/0` 恒等；`KeyN` 切换 / `KeyJ` 重校；右上 `.top-right-stack` + 无 blur `#gesture-pip`（`video` `object-fit: contain` + CSS 单次水平镜像，叠加层 1:1 匹配 letterbox 绘制）；`electron/main.cjs` 严格校验 `app://solaris` 顶层页面纯视频权限与 macOS `NSCameraUsageDescription`/`entitlements.mac.plist`；`v4.3.0` Windows 便携版实测 `140,195,035 B`，`NaturalSelectionSolar.exe` 实机 `app://solaris/index.html` `p50 163.9 FPS` / 0 报错 / 0 外链。
 
 - **v4.2 Stage 5（武器特效、2-op FM 音效重塑与跨平台离线桌面应用）已交付**：
   - **纯激光去穿模与副武器特效升级 (`WeaponSystem.js` / `VFXManager.js` / `UpgradeSystem.js`)**：左键主武器改用仅从炮口前 `1.1u` 向前展开的十字交叉透明激光光带 + 聚能星芒（零“弹壳”倒插穿模，3 视角 `9/9` 命中 + `12u` 偏靶 `0/9` + `96/96/96` 射速 + 共享几何零 `dispose`）；伽马光矛加装双螺旋游丝/聚能环/灼斑；蜂群导弹改为 16 段索引三维网格尾迹 + 双环爆震；EMP 升级六边形穹顶 + 双电离环 + 8 电弧；`Z` 恒星超载独立接入金色爆发；UI 统一为「双联脉冲激光 / 脉冲激光」并保留内部 `dmg.railgun` 等遥测键。

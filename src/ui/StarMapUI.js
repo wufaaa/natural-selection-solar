@@ -32,6 +32,7 @@ export class StarMapUI {
 
     this.isOpen = false;
     this.selectedId = 'earth';
+    this.lockedTargetId = null;
     this.hoveredId = null;
     this.planetScreenCoords = [];
 
@@ -92,7 +93,7 @@ export class StarMapUI {
       btn.className = 'planet-chip';
       btn.dataset.id = b.id;
       btn.innerHTML = `<span>${b.name}</span><small style="color:${b.color}">${b.distanceAU}</small>`;
-      btn.addEventListener('click', () => this.selectBody(b.id));
+      btn.addEventListener('click', () => this.selectBody(b.id, { userExplicit: true }));
       this.quickList.appendChild(btn);
     }
   }
@@ -140,7 +141,7 @@ export class StarMapUI {
         }
       }
       if (bestId) {
-        this.selectBody(bestId);
+        this.selectBody(bestId, { userExplicit: true });
       }
     });
   }
@@ -148,8 +149,8 @@ export class StarMapUI {
   open() {
     this.isOpen = true;
     this.overlay.classList.remove('hidden');
-    const targetId = this.missionManager.activeTargetSectorId || 'earth';
-    this.selectBody(targetId);
+    const targetId = this.lockedTargetId || this.missionManager.activeTargetSectorId || 'earth';
+    this.selectBody(targetId, { userExplicit: false });
     this._resizeCanvas();
   }
 
@@ -158,8 +159,22 @@ export class StarMapUI {
     this.overlay.classList.add('hidden');
   }
 
-  selectBody(id) {
+  getLockedTargetId() {
+    return this.lockedTargetId;
+  }
+
+  clearLockedTarget() {
+    this.lockedTargetId = null;
+    for (const chip of this.quickList.querySelectorAll('.planet-chip')) {
+      chip.classList.remove('locked-waypoint');
+    }
+  }
+
+  selectBody(id, { userExplicit = false } = {}) {
     this.selectedId = id;
+    if (userExplicit) {
+      this.lockedTargetId = id;
+    }
     const body = SOLAR_BODIES.find((b) => b.id === id);
     if (!body) return;
 
@@ -173,6 +188,7 @@ export class StarMapUI {
     for (const chip of this.quickList.querySelectorAll('.planet-chip')) {
       chip.classList.toggle('selected', chip.dataset.id === id);
       chip.classList.toggle('mission-target', chip.dataset.id === missionId);
+      chip.classList.toggle('locked-waypoint', Boolean(this.lockedTargetId) && chip.dataset.id === this.lockedTargetId);
     }
   }
 

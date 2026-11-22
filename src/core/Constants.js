@@ -357,6 +357,7 @@ export const CAREER_STORAGE_KEY = 'solaris_career_v1';
 
 export const DEFAULT_SETTINGS = {
   mouseSensitivity: 1.0,
+  gestureSensitivity: 1.0,
   invertPitch: false,
   autoLevel: true,
   shakeScale: 0.75,

@@ -122,19 +122,62 @@
     <!-- Context-Aware Tactical Hint / Perfect Dodge Banner -->
     <div id="hud-tactical-hint" class="tactical-hint hidden"></div>
 
-    <!-- Top-Right Quick Actions & Telemetry -->
-    <div class="hud-panel sys-panel">
-      <div class="sys-row">
-        <button id="hud-cam-mode" class="mini-btn cam-pill">视角: 战术全景 [V]</button>
-        <span id="hud-fps" class="tabular">60 FPS</span>
+    <!-- Top-Right Quick Actions, Telemetry & Dual-Hand Gesture PiP Stack -->
+    <div class="top-right-stack">
+      <div class="hud-panel sys-panel">
+        <div class="sys-row">
+          <button id="hud-cam-mode" class="mini-btn cam-pill">视角: 战术全景 [V]</button>
+          <span id="hud-fps" class="tabular">60 FPS</span>
+        </div>
+        <div class="sys-btns">
+          <button id="btn-assist" class="mini-btn active-toggle">[B] 辅瞄: 强</button>
+          <button id="btn-gesture-mode" class="mini-btn" title="切换双手摄像头手势飞控">[N] 手势飞控</button>
+          <button id="btn-starmap" class="mini-btn">[M] 星图</button>
+          <button id="btn-keybinds" class="mini-btn">[K] 键位</button>
+          <button id="btn-settings" class="mini-btn">[O] 设置</button>
+          <button id="btn-help" class="mini-btn">[H] 操作</button>
+          <button id="btn-mute" class="mini-btn">[U] 音效</button>
+        </div>
       </div>
-      <div class="sys-btns">
-        <button id="btn-assist" class="mini-btn active-toggle">[B] 辅瞄: 强</button>
-        <button id="btn-starmap" class="mini-btn">[M] 星图</button>
-        <button id="btn-keybinds" class="mini-btn">[K] 键位</button>
-        <button id="btn-settings" class="mini-btn">[O] 设置</button>
-        <button id="btn-help" class="mini-btn">[H] 操作</button>
-        <button id="btn-mute" class="mini-btn">[U] 音效</button>
+
+      <!-- Dual-Hand Webcam Gesture Flight PiP (Mirrored) -->
+      <div id="gesture-pip" class="hud-panel gesture-pip hidden" aria-label="双手手势飞控实时监测">
+        <div class="gesture-pip-header">
+          <div class="gesture-status-wrap">
+            <span id="gesture-status-dot" class="gesture-dot"></span>
+            <span id="gesture-status-text" class="gesture-status-text">准备就绪</span>
+          </div>
+          <div class="gesture-pip-actions">
+            <button id="btn-gesture-flight-hand" class="pip-mini-btn mode-pill" title="切换左飞右火 / 右飞左火">左飞</button>
+            <button id="btn-gesture-cal" class="pip-mini-btn" title="重新校准飞控手中立位">[J] 校准</button>
+            <button id="btn-gesture-exit" class="pip-mini-btn danger" title="立即退回键鼠模式">[N] 退出</button>
+          </div>
+        </div>
+        <div class="gesture-viewport">
+          <video id="gesture-video" class="gesture-video" autoplay playsinline muted></video>
+          <canvas id="gesture-overlay-canvas" class="gesture-overlay-canvas"></canvas>
+        </div>
+        <div id="gesture-cal-track" class="gesture-cal-track hidden">
+          <div id="gesture-cal-fill" class="gesture-cal-fill"></div>
+        </div>
+        <div id="gesture-pip-telemetry" class="gesture-pip-telemetry tabular">飞控 待命 · 火控 待命</div>
+        <div id="gesture-action-guide" class="gesture-action-guide">
+          <div class="gag-row gag-flight">
+            <span id="gag-flight-role" class="gag-role flight">左手</span>
+            <span class="gag-chip" data-chip="move">半握巡航/摆向</span>
+            <span class="gag-chip" data-chip="point">1指原地精瞄</span>
+            <span class="gag-chip boost" data-chip="boost">全拳冲刺</span>
+            <span class="gag-chip" data-chip="dodge">拇指左右翻滚</span>
+          </div>
+          <div class="gag-row gag-ops">
+            <span id="gag-ops-role" class="gag-role ops">右手</span>
+            <span class="gag-chip ops" data-chip="fist">握拳普攻</span>
+            <span class="gag-chip ops" data-chip="f1">1光矛</span>
+            <span class="gag-chip ops" data-chip="f2">2导弹</span>
+            <span class="gag-chip ops" data-chip="f3">3EMP</span>
+            <span class="gag-chip ops" data-chip="warp">捏合跃迁</span>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -261,6 +304,7 @@
       <div class="modal-breakdown hidden" id="modal-breakdown"></div>
       <div class="modal-actions">
         <button id="btn-modal-primary" class="btn-primary">继续作战</button>
+        <button id="btn-modal-exit-gesture" class="mini-btn big hidden">切回键鼠模式</button>
         <button id="modal-btn-settings" class="mini-btn big">操控与体验</button>
         <button id="btn-modal-keys" class="mini-btn big">键位设置</button>
         <button id="btn-modal-secondary" class="mini-btn big">重新开始战役</button>
@@ -339,6 +383,37 @@
             <span id="setting-shake-val" class="tabular setting-val">75%</span>
           </div>
         </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <label for="setting-gesture-mode">双手摄像头手势飞控</label>
+            <small>本地实时识别双手姿态：飞控手管转向/油门/冲刺/桶滚，操作手独立开火/跃迁/选卡，随时按快捷键退回键鼠</small>
+          </div>
+          <div class="setting-ctrl">
+            <input id="setting-gesture-mode" class="setting-check" type="checkbox" />
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <label for="setting-gesture-sens">手势转向灵敏度</label>
+            <small>调节双手手势飞控手的左右偏航与上下俯仰响应幅度</small>
+          </div>
+          <div class="setting-ctrl">
+            <input id="setting-gesture-sens" class="setting-range" type="range" min="0.6" max="1.6" step="0.05" value="1.0" />
+            <span id="setting-gesture-sens-val" class="tabular setting-val">1.0x</span>
+          </div>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <label for="setting-gesture-flight-hand">双手飞控手位置</label>
+            <small>默认左手方向控（张掌停止/半握巡航(2000~3000速)/握紧全拳冲刺/摆向转向/1指原地精瞄/拇指左右翻滚），右手火控（握拳普攻/1-2-3指武器/捏合跃迁/升级选卡）</small>
+          </div>
+          <div class="setting-ctrl">
+            <div id="setting-gesture-flight-hand" class="setting-segmented" role="group" aria-label="双手飞控手位置">
+              <button type="button" class="seg-btn active" data-flight-hand="LEFT">左飞右火</button>
+              <button type="button" class="seg-btn" data-flight-hand="RIGHT">右飞左火</button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -349,6 +424,7 @@
       <div class="tag-line">战术系统升级</div>
       <h2 class="upgrade-title">自然选择号 · 模块部署</h2>
       <p id="upgrade-subtitle" class="upgrade-subtitle">请选择一项强化模块（按 [1] [2] [3] 或点击部署）</p>
+      <div id="upgrade-gesture-banner" class="upgrade-gesture-banner hidden"></div>
       <div id="upgrade-cards" class="upgrade-cards"></div>
     </div>
   </div>

@@ -13,6 +13,7 @@ import {
   SHIP_LOADOUTS,
 } from './core/Constants.js';
 import { InputManager } from './core/InputManager.js';
+import { HandGestureController } from './input/HandGestureController.js';
 import { KeybindManager } from './core/KeybindManager.js';
 import { PostProcessing } from './core/PostProcessing.js';
 import { createArmorDetailTextures, createSpaceEnvMap } from './core/ProceduralTextures.js';
@@ -87,22 +88,35 @@ async function bootstrap() {
       const raw = JSON.parse(localStorage.getItem(SETTINGS_STORAGE_KEY) || 'null');
       if (raw && typeof raw === 'object') {
         const sens = Number(raw.mouseSensitivity);
+        const gSens = Number(raw.gestureSensitivity);
         const shake = Number(raw.shakeScale);
         const vol = Number(raw.masterVolume);
-        return {
+        const hasV2 = Number(raw.gestureHandPrefVersion) >= 2;
+        const loaded = {
           mouseSensitivity: Number.isFinite(sens) ? THREE.MathUtils.clamp(sens, 0.4, 2.2) : DEFAULT_SETTINGS.mouseSensitivity,
+          gestureSensitivity: Number.isFinite(gSens) ? THREE.MathUtils.clamp(gSens, 0.6, 1.6) : DEFAULT_SETTINGS.gestureSensitivity,
+          gestureFlightHand: hasV2 ? (raw.gestureFlightHand === 'RIGHT' ? 'RIGHT' : 'LEFT') : 'LEFT',
+          gestureHandPrefVersion: 2,
           invertPitch: Boolean(raw.invertPitch),
           autoLevel: raw.autoLevel === undefined ? DEFAULT_SETTINGS.autoLevel : Boolean(raw.autoLevel),
           shakeScale: Number.isFinite(shake) ? THREE.MathUtils.clamp(shake, 0, 1.5) : DEFAULT_SETTINGS.shakeScale,
           masterVolume: Number.isFinite(vol) ? THREE.MathUtils.clamp(vol, 0, 1.5) : DEFAULT_SETTINGS.masterVolume,
           reduceMotion: raw.reduceMotion === undefined ? DEFAULT_SETTINGS.reduceMotion : Boolean(raw.reduceMotion),
         };
+        if (!hasV2) {
+          try {
+            localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(loaded));
+          } catch (_) {}
+        }
+        return loaded;
       }
     } catch (_) {}
-    return { ...DEFAULT_SETTINGS };
+    return { ...DEFAULT_SETTINGS, gestureFlightHand: 'LEFT', gestureHandPrefVersion: 2 };
   };
 
   let settings = loadSettings();
+  let gestureDesired = false;
+  let windowFocused = typeof document !== 'undefined' ? !document.hidden : true;
   const saveSettings = () => {
     try {
       localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
@@ -118,10 +132,17 @@ async function bootstrap() {
   const settingAutoLevelEl = document.getElementById('setting-autolevel');
   const settingShakeEl = document.getElementById('setting-shake');
   const settingShakeValEl = document.getElementById('setting-shake-val');
+  const settingGestureModeEl = document.getElementById('setting-gesture-mode');
+  const settingGestureSensEl = document.getElementById('setting-gesture-sens');
+  const settingGestureSensValEl = document.getElementById('setting-gesture-sens-val');
+  const settingGestureFlightHandEl = document.getElementById('setting-gesture-flight-hand');
+  const upgradeOverlayEl = document.getElementById('upgrade-overlay');
+  const btnModalExitGesture = document.getElementById('btn-modal-exit-gesture');
   const settingsOverlay = document.getElementById('settings-overlay');
 
   const applySettings = () => {
     ship.settings.mouseSensitivity = settings.mouseSensitivity;
+    ship.settings.gestureSensitivity = settings.gestureSensitivity;
     ship.settings.invertPitch = settings.invertPitch;
     ship.settings.autoLevel = settings.autoLevel;
     ship.settings.shakeScale = settings.shakeScale;
@@ -140,6 +161,14 @@ async function bootstrap() {
     if (settingAutoLevelEl) settingAutoLevelEl.checked = settings.autoLevel;
     if (settingShakeEl) settingShakeEl.value = String(settings.shakeScale);
     if (settingShakeValEl) settingShakeValEl.textContent = `${Math.round(settings.shakeScale * 100)}%`;
+    if (settingGestureModeEl) settingGestureModeEl.checked = Boolean(gestureDesired || input.controlMode === 'GESTURE');
+    if (settingGestureSensEl) settingGestureSensEl.value = String(settings.gestureSensitivity);
+    if (settingGestureSensValEl) settingGestureSensValEl.textContent = `${settings.gestureSensitivity.toFixed(1)}x`;
+    if (settingGestureFlightHandEl) {
+      for (const btn of settingGestureFlightHandEl.querySelectorAll('.seg-btn')) {
+        btn.classList.toggle('active', (btn.dataset.flightHand === 'LEFT' ? 'LEFT' : 'RIGHT') === settings.gestureFlightHand);
+      }
+    }
   };
 
   const loadCareer = () => {
@@ -388,25 +417,184 @@ async function bootstrap() {
 
   const closeModal = () => modalOverlay.classList.add('hidden');
 
+  const shouldSuspendGesture = () =>
+    (playMode !== 'PLAYING' && playMode !== 'UPGRADE') ||
+    !windowFocused ||
+    (typeof document !== 'undefined' && document.hidden) ||
+    (playMode === 'PLAYING' && ship.warpState !== 'IDLE');
+
+  const syncGestureUI = () => {
+    if (settingGestureModeEl) {
+      settingGestureModeEl.checked = Boolean(gestureDesired || input.controlMode === 'GESTURE');
+    }
+    btnModalExitGesture?.classList.toggle(
+      'hidden',
+      !(playMode === 'PAUSED' && (input.controlMode === 'GESTURE' || gestureDesired))
+    );
+    hud.setGestureButtonState?.(input.controlMode === 'GESTURE', keybinds);
+  };
+
+  let gestureController = null;
+  let upgradeUI = null;
+  let starMap = null;
+
+  const setGestureFlightHand = (nextHand) => {
+    const normalized = nextHand === 'LEFT' ? 'LEFT' : 'RIGHT';
+    settings.gestureFlightHand = normalized;
+    saveSettings();
+    applySettings();
+    gestureController?.setFlightHand?.(normalized);
+    input.clearGestureInput();
+    if (playMode === 'PLAYING' && input.controlMode === 'GESTURE') {
+      const handWord = normalized === 'LEFT' ? '左飞右火' : '右飞左火';
+      const sideWord = normalized === 'LEFT' ? '左' : '右';
+      hud.showTacticalHint(
+        `已切换${handWord}：请用${sideWord}手张掌校准 · 半握巡航/全拳冲刺，操作手独立开火`,
+        '#ffd95e',
+        3.6
+      );
+    }
+  };
+
+  const exitGestureMode = ({ reason = null, isError = false, silent = false } = {}) => {
+    gestureDesired = false;
+    input.clearGestureInput();
+    input.setControlMode('KBM');
+    if (gestureController && gestureController.phase !== 'OFF' && gestureController.phase !== 'ERROR') {
+      gestureController.disable();
+    }
+    upgradeOverlayEl?.classList.remove('gesture-pip-open');
+    upgradeUI?.setGestureState?.(null, 'KBM');
+    if (playMode === 'UPGRADE') {
+      hud.setMode('UPGRADE', { keepGesturePip: false });
+    }
+    hud.updateGesturePiP?.(null, 'KBM', keybinds, { flightHand: settings.gestureFlightHand });
+    syncGestureUI();
+    if (reason) {
+      hud.showTacticalHint(reason, isError ? '#ff8c50' : '#4ce8ff', isError ? 4.4 : 2.8);
+      if (isError) hud.addComm('手势飞控核心', reason);
+    } else if (!silent) {
+      hud.showTacticalHint('已切回键鼠飞控模式', '#4ce8ff', 2.4);
+    }
+  };
+
+  gestureController = new HandGestureController({
+    onStateChange: (snap) => {
+      if (snap?.phase === 'ERROR') {
+        const msg = snap.errorMessage || '无法启动摄像头，已切回键鼠。';
+        exitGestureMode({ reason: msg, isError: true });
+      }
+    },
+  });
+  gestureController.setFlightHand?.(settings.gestureFlightHand);
+
+  const syncGestureSuspension = () => {
+    if (input.controlMode !== 'GESTURE') return;
+    const suspend = shouldSuspendGesture();
+    gestureController.setSuspended(suspend);
+    if (suspend) {
+      input.clearGestureInput();
+    }
+  };
+
+  const enterGestureMode = async () => {
+    gestureDesired = true;
+    if (playMode !== 'PLAYING') {
+      syncGestureUI();
+      return true;
+    }
+    input.setControlMode('GESTURE');
+    gestureController.setFlightHand?.(settings.gestureFlightHand);
+    gestureController.setContextMode?.('FLIGHT');
+    gestureController.setSuspended(shouldSuspendGesture());
+    syncGestureUI();
+    const initialSnap = gestureController.getSnapshot(performance.now());
+    input.setGestureInput({ aimX: 0, aimY: 0, throttle: 0, firePrimary: false, fireSecondary: false, boost: false, snapshot: initialSnap });
+    hud.updateGesturePiP?.(initialSnap, 'GESTURE', keybinds, { flightHand: settings.gestureFlightHand });
+    const videoEl = hud.getGestureVideoElement?.();
+    const ok = await gestureController.enable(videoEl);
+    if (!ok || !gestureDesired || input.controlMode !== 'GESTURE') {
+      if (ok && (!gestureDesired || input.controlMode !== 'GESTURE')) {
+        gestureController.disable();
+      } else if (input.controlMode === 'GESTURE') {
+        const errSnap = gestureController.getSnapshot(performance.now());
+        exitGestureMode({ reason: errSnap?.errorMessage || '无法启动摄像头，已切回键鼠。', isError: true });
+      }
+      return false;
+    }
+    syncGestureSuspension();
+    const flightSideWord = settings.gestureFlightHand === 'LEFT' ? '左' : '右';
+    const opsSideWord = settings.gestureFlightHand === 'LEFT' ? '右' : '左';
+    hud.showTacticalHint(
+      `双手手势已开启：${flightSideWord}手(张掌停止/半握巡航/握紧全拳冲刺/摆向转向/1指精瞄/拇指左右翻滚) · ${opsSideWord}手(握拳/1-2-3指武器/捏合跃迁) · [${keybinds.getLabel('gestureToggle')}] 退出`,
+      '#4ce8ff',
+      4.8
+    );
+    return true;
+  };
+
+  const recalibrateGesture = () => {
+    if (input.controlMode !== 'GESTURE') return;
+    gestureController.recalibrate();
+    input.clearGestureInput();
+    hud.showTacticalHint('正在重新校准飞控手中立位，请飞控手张掌保持约 0.55 秒', '#ffd95e', 2.4);
+  };
+
   const setPlayMode = (next) => {
     playMode = next;
+    if (next !== 'PLAYING') {
+      input.clearGestureInput();
+    }
     input.enabled = next === 'PLAYING';
     input.captureTab = next === 'PLAYING' || next === 'STARMAP';
+    const keepGestureUpgrade = next === 'UPGRADE' && input.controlMode === 'GESTURE';
+    upgradeOverlayEl?.classList.toggle('gesture-pip-open', keepGestureUpgrade);
+
     if (next === 'PLAYING') {
+      upgradeUI?.setGestureState?.(null, 'KBM');
       input.resetAim();
-    } else {
+      if (gestureDesired && input.controlMode !== 'GESTURE') {
+        void enterGestureMode();
+      } else if (input.controlMode === 'GESTURE') {
+        gestureController.setContextMode?.('FLIGHT');
+        input.clearGestureInput();
+        gestureController.setSuspended(shouldSuspendGesture());
+      }
+    } else if (next === 'UPGRADE') {
       input.releaseLock();
       audio.setGammaActive(false);
       weaponSystem.gammaActive = false;
       weaponSystem.gammaGroup.visible = false;
+      if (input.controlMode === 'GESTURE') {
+        gestureController.setContextMode?.('UPGRADE', { draftVersion: upgradeUI?.draftVersion || 0 });
+        syncGestureSuspension();
+        const snap = gestureController.getSnapshot(performance.now());
+        input.setGestureInput({ aimX: 0, aimY: 0, throttle: 0, firePrimary: false, fireSecondary: false, boost: false, snapshot: snap });
+        upgradeUI?.setGestureState?.(snap, 'GESTURE');
+      } else {
+        upgradeUI?.setGestureState?.(null, 'KBM');
+      }
+    } else {
+      upgradeUI?.setGestureState?.(null, 'KBM');
+      input.releaseLock();
+      audio.setGammaActive(false);
+      weaponSystem.gammaActive = false;
+      weaponSystem.gammaGroup.visible = false;
+      if (next === 'VICTORY' || next === 'DEFEAT' || (next === 'TITLE' && input.controlMode === 'GESTURE')) {
+        exitGestureMode({ silent: true });
+      } else if (input.controlMode === 'GESTURE') {
+        syncGestureSuspension();
+      }
     }
-    hud.setMode(next);
+    hud.setMode(next, { keepGesturePip: keepGestureUpgrade });
+    syncGestureUI();
   };
 
   const startNewCampaign = () => {
     closeModal();
     settingsOverlay?.classList.add('hidden');
     keybindUI?.close();
+    starMap?.clearLockedTarget?.();
     lastModalCfg = null;
     upgradeUI?.close();
     upgradeSystem.reset();
@@ -480,6 +668,7 @@ async function bootstrap() {
       onSecondary: () => {
         closeModal();
         lastModalCfg = null;
+        starMap?.clearLockedTarget?.();
         enemyManager.clearAll();
         weaponSystem.reset();
         upgradeSystem.reset();
@@ -493,11 +682,38 @@ async function bootstrap() {
     });
   };
 
+  const isShipAwayFromBody = (bodyId) => {
+    if (!bodyId) return false;
+    const def = solarSystem.bodies.get(bodyId)?.def;
+    const wp = solarSystem.getBodyWorldPosition(bodyId);
+    if (!def || !wp) return false;
+    return wp.distanceTo(ship.root.position) >= def.radius * 3.5 + 240;
+  };
+
+  const resolveExplicitWarpTarget = () => {
+    if (hud.explicitAimedWarpBodyId && isShipAwayFromBody(hud.explicitAimedWarpBodyId)) {
+      return hud.explicitAimedWarpBodyId;
+    }
+    const mapLocked = starMap?.getLockedTargetId?.();
+    if (mapLocked && isShipAwayFromBody(mapLocked)) {
+      return mapLocked;
+    }
+    if (hud.explicitMissionWarpBodyId && isShipAwayFromBody(hud.explicitMissionWarpBodyId)) {
+      return hud.explicitMissionWarpBodyId;
+    }
+    return null;
+  };
+
   const initiateWarp = (sectorId) => {
     const dest = solarSystem.getWarpTargetPosition(sectorId);
     if (!dest) return;
+    if (starMap?.getLockedTargetId?.() === sectorId) {
+      starMap.clearLockedTarget();
+    }
     const waypoints = solarSystem.computeSafeWarpWaypoints?.(ship.root.position, dest) || [dest];
     ship.startWarp(sectorId, dest, waypoints);
+    input.clearGestureInput();
+    syncGestureSuspension();
     audio.playWarpCharge();
     const body = solarSystem.bodies.get(sectorId)?.def;
     if (body) {
@@ -506,7 +722,7 @@ async function bootstrap() {
     }
   };
 
-  const starMap = new StarMapUI(
+  starMap = new StarMapUI(
     solarSystem,
     missionManager,
     enemyManager,
@@ -642,10 +858,34 @@ async function bootstrap() {
     saveSettings();
   });
   settingShakeEl?.addEventListener('change', () => settingShakeEl.blur());
-  document.getElementById('btn-reset-settings')?.addEventListener('click', () => {
-    settings = { ...DEFAULT_SETTINGS };
+  settingGestureModeEl?.addEventListener('change', () => {
+    const wantGesture = Boolean(settingGestureModeEl.checked);
+    if (wantGesture) {
+      gestureDesired = true;
+      syncGestureUI();
+    } else {
+      exitGestureMode({ silent: playMode !== 'PLAYING' });
+    }
+    settingGestureModeEl.blur();
+  });
+  settingGestureSensEl?.addEventListener('input', () => {
+    const val = Number(settingGestureSensEl.value);
+    settings.gestureSensitivity = Number.isFinite(val) ? THREE.MathUtils.clamp(val, 0.6, 1.6) : 1.0;
     applySettings();
     saveSettings();
+  });
+  settingGestureSensEl?.addEventListener('change', () => settingGestureSensEl.blur());
+  settingGestureFlightHandEl?.addEventListener('click', (e) => {
+    const btn = e.target?.closest?.('.seg-btn');
+    if (!btn) return;
+    setGestureFlightHand(btn.dataset.flightHand === 'LEFT' ? 'LEFT' : 'RIGHT');
+    btn.blur?.();
+  });
+  document.getElementById('btn-reset-settings')?.addEventListener('click', () => {
+    settings = { ...DEFAULT_SETTINGS, gestureFlightHand: 'LEFT', gestureHandPrefVersion: 2 };
+    applySettings();
+    saveSettings();
+    gestureController.setFlightHand?.(settings.gestureFlightHand);
   });
   document.getElementById('btn-close-settings')?.addEventListener('click', closeSettings);
   document.getElementById('btn-title-settings')?.addEventListener('click', openSettings);
@@ -654,7 +894,7 @@ async function bootstrap() {
   });
   document.getElementById('modal-btn-settings')?.addEventListener('click', openSettings);
 
-  const upgradeUI = new UpgradeUI(upgradeSystem, (picked) => {
+  upgradeUI = new UpgradeUI(upgradeSystem, (picked) => {
     upgradeSystem.applyUpgrade(picked.id, ship, weaponSystem);
     ship.shieldRegenMult = 1 + upgradeSystem.getLevel('phase_shield') * 0.45;
     ship.boostDrainMult = Math.max(0.35, 1 - upgradeSystem.getLevel('overdrive_core') * 0.45);
@@ -663,6 +903,7 @@ async function bootstrap() {
       setPlayMode('UPGRADE');
     } else {
       pendingUpgradeOpen = false;
+      input.clearGestureInput();
       setPlayMode('PLAYING');
       input.requestLock();
     }
@@ -693,6 +934,25 @@ async function bootstrap() {
   document.getElementById('hud-cam-mode')?.addEventListener('click', () => {
     if (playMode === 'PLAYING') cameraRig.cycleMode();
   });
+  document.getElementById('btn-gesture-mode')?.addEventListener('click', () => {
+    if (playMode !== 'PLAYING') return;
+    if (input.controlMode === 'GESTURE') exitGestureMode();
+    else void enterGestureMode();
+  });
+  document.getElementById('btn-gesture-flight-hand')?.addEventListener('click', () => {
+    if (input.controlMode !== 'GESTURE') return;
+    setGestureFlightHand(settings.gestureFlightHand === 'LEFT' ? 'RIGHT' : 'LEFT');
+  });
+  document.getElementById('btn-gesture-cal')?.addEventListener('click', () => {
+    if (playMode === 'PLAYING') recalibrateGesture();
+  });
+  document.getElementById('btn-gesture-exit')?.addEventListener('click', () => {
+    if (input.controlMode === 'GESTURE' || gestureDesired) exitGestureMode();
+  });
+  btnModalExitGesture?.addEventListener('click', () => {
+    exitGestureMode({ silent: true });
+    syncGestureUI();
+  });
 
   const updateMuteButtonLabel = (muted) => {
     const btnMute = document.getElementById('btn-mute');
@@ -722,8 +982,26 @@ async function bootstrap() {
     post.resize(window.innerWidth, window.innerHeight);
   });
 
+  window.addEventListener('blur', () => {
+    windowFocused = false;
+    input.clearGestureInput();
+    syncGestureSuspension();
+  });
+  window.addEventListener('focus', () => {
+    windowFocused = true;
+    syncGestureSuspension();
+  });
+  document.addEventListener('visibilitychange', () => {
+    windowFocused = !document.hidden;
+    if (document.hidden) input.clearGestureInput();
+    syncGestureSuspension();
+  });
+  window.addEventListener('pagehide', () => {
+    gestureController.disable();
+  });
+
   input.onLockDenied = () => {
-    if (playMode === 'PLAYING') {
+    if (playMode === 'PLAYING' && input.controlMode !== 'GESTURE') {
       hintOnce('lock_denied', '点击游戏画面中央即可捕获鼠标准星（或直接用方向手感操舵）', '#4ce8ff', 3.4);
     }
   };
@@ -731,8 +1009,12 @@ async function bootstrap() {
   // Expose light read-only telemetry for inspection
   window.__SOLARIS__ = {
     get state() {
+      const gSnap = input.controlMode === 'GESTURE'
+        ? gestureController.getSnapshot(performance.now())
+        : gestureController.status || null;
       return {
         playMode,
+        controlMode: input.controlMode,
         mode: missionManager.mode,
         stage: missionManager.stageIndex + 1,
         wave: missionManager.endlessWave,
@@ -750,10 +1032,70 @@ async function bootstrap() {
           damageByWeapon: { ...enemyManager.stats.damageByWeapon },
         },
         settings: { ...settings },
+        gesture: {
+          controllerPhase: gestureController.phase,
+          suspended: gestureController.suspended,
+          handMode: gSnap?.handMode || 'DUAL',
+          flightHand: gSnap?.flightHand || settings.gestureFlightHand,
+          contextMode: gSnap?.contextMode || 'FLIGHT',
+          phase: gSnap?.phase || 'OFF',
+          pose: gSnap?.pose || 'NONE',
+          flightPose: gSnap?.flightPose || 'NONE',
+          tracking: Boolean(gSnap?.tracking),
+          calibrated: Boolean(gSnap?.calibrated),
+          aimX: Number((gSnap?.aimX || 0).toFixed(4)),
+          aimY: Number((gSnap?.aimY || 0).toFixed(4)),
+          throttle: Number((gSnap?.throttle || 0).toFixed(4)),
+          firePrimary: Boolean(gSnap?.firePrimary),
+          fireSecondary: Boolean(gSnap?.fireSecondary),
+          boost: Boolean(gSnap?.boost),
+          boostSource: gSnap?.boostSource || null,
+          eventEpoch: gSnap?.eventEpoch ?? 0,
+          events: gSnap?.events || null,
+          warpTargetId: gSnap?.warpTargetId || null,
+          warpChargeProgress: Number((gSnap?.warpChargeProgress || 0).toFixed(4)),
+          crossingGuard: Boolean(gSnap?.crossingGuard),
+          flightStatus: gSnap?.flightStatus || null,
+          opsStatus: gSnap?.opsStatus || null,
+          upgradeSelection: gSnap?.upgradeSelection || null,
+          debug: gSnap?.debug || null,
+          requireOpenPalmToArm: Boolean(gSnap?.requireOpenPalmToArm),
+          errorMessage: gSnap?.errorMessage || null,
+        },
         simTime: Number(simTime.toFixed(2)),
       };
     },
     warpTo: (id) => initiateWarp(id),
+    setControlMode: (mode) => (mode === 'GESTURE' ? enterGestureMode() : (exitGestureMode({ silent: true }), Promise.resolve(true))),
+    setGestureFlightHand: (hand) => setGestureFlightHand(hand),
+    getGestureTelemetry: (limit) => gestureController?.getTelemetry?.(limit) ?? [],
+    getExplicitWarpTarget: () => resolveExplicitWarpTarget(),
+    setStarMapLockedTarget: (id) => {
+      if (id) starMap?.selectBody?.(id, { userExplicit: true });
+      else starMap?.clearLockedTarget?.();
+    },
+    openTestUpgrade: () => {
+      if (playMode !== 'PLAYING' || upgradeUI?.isOpen) return false;
+      upgradeSystem.pendingDrafts = Math.max(1, upgradeSystem.pendingDrafts);
+      if (upgradeUI?.open()) {
+        setPlayMode('UPGRADE');
+        return true;
+      }
+      return false;
+    },
+    recalibrateGesture: () => recalibrateGesture(),
+    injectGestureSample: (sample, nowMs = performance.now()) => {
+      const snap = gestureController.injectMockSample(sample, nowMs);
+      if (input.controlMode === 'GESTURE' && !shouldSuspendGesture()) {
+        if (playMode === 'PLAYING') {
+          input.setGestureInput({ ...snap, snapshot: snap });
+        } else if (playMode === 'UPGRADE') {
+          input.setGestureInput({ aimX: 0, aimY: 0, throttle: 0, firePrimary: false, fireSecondary: false, boost: false, snapshot: snap });
+          upgradeUI?.setGestureState?.(snap, 'GESTURE');
+        }
+      }
+      return snap;
+    },
   };
 
   hud.setLoading(1.0, '就绪');
@@ -814,6 +1156,20 @@ async function bootstrap() {
       runElapsedSec += dt;
     }
 
+    // Poll dual-hand gesture snapshot BEFORE hotkey / gestureWarp dispatch and BEFORE ship.update
+    let explicitWarpTargetId = null;
+    if (playMode === 'PLAYING' && input.controlMode === 'GESTURE') {
+      explicitWarpTargetId = ship.warpState === 'IDLE' ? resolveExplicitWarpTarget() : null;
+      gestureController.setWarpTarget?.(explicitWarpTargetId);
+      syncGestureSuspension();
+      const gSnap = gestureController.getSnapshot(performance.now());
+      if (!shouldSuspendGesture()) {
+        input.setGestureInput({ ...gSnap, snapshot: gSnap });
+      } else {
+        input.setGestureInput({ aimX: 0, aimY: 0, throttle: 0, firePrimary: false, fireSecondary: false, boost: false, snapshot: gSnap });
+      }
+    }
+
     // Hotkey actions
     if (input.consumeAction('mute') && playMode !== 'KEYBINDS') {
       audio.ensureInit();
@@ -829,9 +1185,26 @@ async function bootstrap() {
         closeKeybinds();
       }
     } else if (playMode === 'UPGRADE') {
-      if (input.consumeJustPressed('Digit1') || input.consumeJustPressed('Numpad1')) upgradeUI.pickIndex(0);
-      else if (input.consumeJustPressed('Digit2') || input.consumeJustPressed('Numpad2')) upgradeUI.pickIndex(1);
-      else if (input.consumeJustPressed('Digit3') || input.consumeJustPressed('Numpad3')) upgradeUI.pickIndex(2);
+      if (input.consumeAction('gestureToggle') && input.controlMode === 'GESTURE') {
+        exitGestureMode();
+      } else if (input.consumeJustPressed('Digit1') || input.consumeJustPressed('Numpad1')) {
+        upgradeUI.pickIndex(0, upgradeUI.draftVersion);
+      } else if (input.consumeJustPressed('Digit2') || input.consumeJustPressed('Numpad2')) {
+        upgradeUI.pickIndex(1, upgradeUI.draftVersion);
+      } else if (input.consumeJustPressed('Digit3') || input.consumeJustPressed('Numpad3')) {
+        upgradeUI.pickIndex(2, upgradeUI.draftVersion);
+      } else if (input.controlMode === 'GESTURE') {
+        syncGestureSuspension();
+        const gSnap = gestureController.getSnapshot(performance.now());
+        input.setGestureInput({ aimX: 0, aimY: 0, throttle: 0, firePrimary: false, fireSecondary: false, boost: false, snapshot: gSnap });
+        upgradeUI.setGestureState?.(gSnap, 'GESTURE');
+        const commitIdx = gSnap?.upgradeSelection?.committedIndex;
+        const snapVer = gSnap?.upgradeSelection?.draftVersion;
+        if (!shouldSuspendGesture() && Number.isInteger(commitIdx) && commitIdx >= 0
+          && (snapVer === undefined || snapVer === upgradeUI.draftVersion)) {
+          upgradeUI.pickIndex(commitIdx, upgradeUI.draftVersion);
+        }
+      }
     } else if (playMode === 'PLAYING') {
       if (input.consumeAction('starmap') || input.consumeJustPressed('Tab')) {
         setPlayMode('STARMAP');
@@ -846,18 +1219,45 @@ async function bootstrap() {
         if (input.consumeAction('camera')) cameraRig.cycleMode();
         if (input.consumeAction('help')) hud.toggleHelp();
         if (input.consumeAction('aimAssist')) toggleAssistMode();
+        if (input.consumeAction('gestureToggle')) {
+          if (input.controlMode === 'GESTURE') exitGestureMode();
+          else void enterGestureMode();
+        }
+        if (input.consumeAction('gestureCalibrate') && input.controlMode === 'GESTURE') {
+          recalibrateGesture();
+        }
         if (input.consumeAction('overdrive')) {
           upgradeSystem.triggerOverdrive(ship);
         }
         if (input.consumeAction('autoTrack') && !weaponSystem.aimAssistTarget) {
           weaponSystem.cycleManualTarget(ship, enemyManager);
         }
+        if (input.controlMode === 'GESTURE' && input.consumeAction('gestureWarp')) {
+          if (ship.warpState === 'IDLE') {
+            const targetId = input.gestureSnapshot?.warpTargetId ?? null;
+            if (targetId && targetId === explicitWarpTargetId && isShipAwayFromBody(targetId)) {
+              const body = solarSystem.bodies.get(targetId)?.def;
+              if (body) {
+                hud.showTacticalHint(`捏合跃迁 · 目标「${body.name}」充能中...`, '#4ce8ff', 2.4);
+              }
+              initiateWarp(targetId);
+            } else if (!explicitWarpTargetId) {
+              hud.showTacticalHint(
+                `请先瞄准目标行星或在 [${keybinds.getLabel('starmap')}] 星图选定航点后再捏合跃迁`,
+                '#ffd95e',
+                3.2
+              );
+            }
+          }
+        }
         if (input.consumeAction('warp')) {
           if (ship.warpState !== 'IDLE') {
             ship.cancelWarp();
+            input.clearGestureInput();
+            syncGestureSuspension();
             hud.addComm('曲率导航核心', '曲率引擎已紧急脱离。');
           } else {
-            const targetId = hud.aimedWarpBodyId || missionManager.activeTargetSectorId || 'earth';
+            const targetId = hud.aimedWarpBodyId || starMap.getLockedTargetId?.() || missionManager.activeTargetSectorId || 'earth';
             initiateWarp(targetId);
           }
         }
@@ -873,6 +1273,8 @@ async function bootstrap() {
         closeModal();
         setPlayMode('PLAYING');
         input.requestLock();
+      } else if (input.consumeAction('gestureToggle') && (input.controlMode === 'GESTURE' || gestureDesired)) {
+        exitGestureMode({ silent: true });
       } else if (input.consumeAction('settings')) {
         openSettings();
       } else if (input.consumeAction('keybinds')) {
@@ -894,6 +1296,26 @@ async function bootstrap() {
         const trackPos = weaponSystem.getManualTrackPoint?.(ship, enemyManager);
         if (trackPos) {
           assistOptions = { leadPos: trackPos, strength: 3.1, rate: 2.0 };
+        }
+      } else if (
+        playMode === 'PLAYING'
+        && ship.warpState === 'IDLE'
+        && input.controlMode === 'GESTURE'
+        && weaponSystem.aimAssistMode !== 'OFF'
+        && weaponSystem.hasAimAssistLock
+        && weaponSystem.aimAssistTarget?.hp > 0
+      ) {
+        const steerMag = Math.hypot(input.gestureAimX, input.gestureAimY);
+        if (steerMag < 0.42) {
+          const fade = 1 - steerMag / 0.42;
+          const inPoint = input.gestureSnapshot?.flightPose === 'POINT_ROTATE';
+          const firing = input.isActionDown('firePrimary') || input.isActionDown('fireSecondary');
+          const modeMult = weaponSystem.aimAssistMode === 'STRONG' ? 1.15 : 0.85;
+          assistOptions = {
+            leadPos: weaponSystem.aimAssistLeadPos,
+            strength: (inPoint ? 2.4 : firing ? 2.1 : 1.55) * modeMult * fade,
+            rate: inPoint ? 1.35 : 1.10,
+          };
         }
       }
 
@@ -919,6 +1341,13 @@ async function bootstrap() {
         ship.yawVel = 0;
         ship.pitchVel = 0;
         input.resetAim();
+        if (input.controlMode === 'GESTURE') {
+          syncGestureSuspension();
+          input.clearGestureInput();
+        }
+        if (starMap?.getLockedTargetId?.() === arrivedId) {
+          starMap.clearLockedTarget();
+        }
         missionManager.onSectorArrived(arrivedId);
       }, assistOptions, (a, b) => solarSystem.isWarpSegmentClear(a, b));
 
@@ -934,6 +1363,8 @@ async function bootstrap() {
         );
         if (wasWarping && (col === 'SOLAR_CORONA' || col === 'ATMOSPHERE')) {
           ship.cancelWarp();
+          input.clearGestureInput();
+          syncGestureSuspension();
           hud.addComm('曲率导航核心', '航道临近大质量天体引力边界，已安全退出超巡航。');
         }
         if (col === 'SOLAR_CORONA') {
@@ -1030,6 +1461,8 @@ async function bootstrap() {
       elapsed: simTime,
       rawFps,
       reduceMotion: settings.reduceMotion,
+      starMapLockedTargetId: starMap.getLockedTargetId?.() || null,
+      gestureFlightHand: settings.gestureFlightHand,
     });
 
     post.render(dt, {
